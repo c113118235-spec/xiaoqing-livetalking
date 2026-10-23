@@ -121,3 +121,7 @@ docker logs lt-tunnel 2>&1 | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com'
 - LiveTalking：Apache-2.0，發布的影片需保留 LiveTalking 標示
 - wav2lip 權重、CosyVoice、Whisper 依各自授權；FLUX.1-dev、insightface 為非商用授權，本專案僅供學校展示
 - `data/avatars/wav2lip256_avatar1`（LiveTalking 官方範例人物）未打包
+
+---
+
+本專案以 [LiveTalking](https://github.com/lipku/LiveTalking)（Apache-2.0）為基礎修改，原專案說明見 [README-LiveTalking.md](README-LiveTalking.md)。
