@@ -1,6 +1,5 @@
 # 小晴 · LiveTalking 即時串流版
 
-施誠軒（國立高雄科技大學 資訊管理系）· 2026/10/23
 
 以開源專案 LiveTalking（https://github.com/lipku/LiveTalking ，Apache-2.0）為基礎，
 在 DGX Spark 上做成虛擬女友「小晴」：WebRTC 即時影像、可打斷、語音輸入、情緒語音、公開網址加通關碼。
