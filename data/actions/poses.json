@@ -1,0 +1,46 @@
+{
+ "default_pose": "sit",
+ "poses": {
+  "sit": "xiaoqing"
+ },
+ "idle": {
+  "actions": [
+   "look_window",
+   "look_turn"
+  ],
+  "min_sec": 25,
+  "max_sec": 60
+ },
+ "actions": {
+  "wave": {
+   "frames": "wave_sit",
+   "pingpong": false,
+   "from": "sit",
+   "to": "sit"
+  },
+  "look_window": {
+   "frames": "look_window",
+   "pingpong": true,
+   "from": "sit",
+   "to": "sit"
+  },
+  "look_turn": {
+   "frames": "../lp_out/look_window",
+   "pingpong": false,
+   "from": "sit",
+   "to": "sit"
+  },
+  "thumbs_up": {
+   "frames": "thumbs_up",
+   "pingpong": false,
+   "from": "sit",
+   "to": "sit"
+  },
+  "clap": {
+   "frames": "clap",
+   "pingpong": false,
+   "from": "sit",
+   "to": "sit"
+  }
+ }
+}

@@ -161,24 +161,33 @@ async def sse_handler(request):
         reason='OK',
         headers={
             'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
+            'Cache-Control': 'no-cache, no-transform',
+            'X-Accel-Buffering': 'no',
             'Connection': 'keep-alive',
             'Access-Control-Allow-Origin': '*',
         }
     )
     await response.prepare(request)
+    # 先送一段填充，讓 Cloudflare 等代理立刻開始邊收邊轉
+    await response.write((':' + ' ' * 2048 + '\n\n').encode())
 
     import queue
     msgqueue = queue.Queue()
     avatar_session.add_msgqueue(msgqueue)
 
+    _idle = 0.0
     try:
         while True:
             try:
                 msg = msgqueue.get_nowait()
                 await response.write(f"data: {msg}\n\n".encode('utf-8'))
+                _idle = 0.0
             except queue.Empty:
                 await asyncio.sleep(0.01)
+                _idle += 0.01
+                if _idle >= 15:          # 每 15 秒送心跳，避免代理斷線
+                    _idle = 0.0
+                    await response.write(b': ping\n\n')
     except (asyncio.CancelledError, ConnectionResetError):
         logger.info('SSE connection closed for session: %s', sessionid)
     finally:

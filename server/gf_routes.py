@@ -37,7 +37,7 @@ COOKIE_VALUE = hashlib.sha256(("xiaoqing:" + ACCESS_CODE).encode()).hexdigest() 
 
 # 從公開網址進來時，通過門禁後只開放這些路徑
 PUBLIC_PATHS = {"/", "/xiaoqing.html", "/offer", "/human", "/sse", "/asr",
-                "/interrupt_talk", "/is_speaking", "/iceservers"}
+                "/interrupt_talk", "/is_speaking", "/iceservers", "/pose", "/pose/actions"}
 
 
 # ───────────── 1. 語音辨識代轉 ─────────────
@@ -212,6 +212,9 @@ async def gate(request):
     return web.Response(text=GATE_HTML.format(err=""), content_type="text/html")
 
 
+PUBLIC_PATHS = set(PUBLIC_PATHS) | {"/persona", "/persona/list", "/sse", "/msgpoll"}
+
+
 @web.middleware
 async def gate_middleware(request, handler):
     if not _from_tunnel(request):
@@ -232,8 +235,116 @@ async def gate_middleware(request, handler):
     return await handler(request)
 
 
+# ───────────── 5. 姿勢與動作（gf_pose.py） ─────────────
+async def pose(request):
+    """POST /pose {sessionid, action}：action 例如 stand、sit、wave"""
+    try:
+        params = await request.json()
+        from server.session_manager import session_manager
+        s = session_manager.get_session(str(params.get("sessionid", "")))
+        if s is None:
+            s = session_manager.get_session(params.get("sessionid"))
+        ctl = getattr(s, "_gf_pose", None) if s is not None else None
+        if ctl is None:
+            return web.json_response({"ok": False, "msg": "這個連線沒有姿勢功能"}, status=400)
+        ok, msg = ctl.request(str(params.get("action", "")))
+        return web.json_response({"ok": ok, "msg": msg, "pose": ctl.pose})
+    except Exception as e:
+        logger.exception("[gf-pose] /pose exception:")
+        return web.json_response({"ok": False, "msg": str(e)}, status=500)
+
+
+async def pose_actions(request):
+    from server import gf_pose
+    return web.json_response(gf_pose.actions())
+
+
+async def persona(request):
+    """POST /persona {sessionid, persona}：切換這個連線的人設，並讓她打招呼"""
+    try:
+        params = await request.json()
+        from server.session_manager import session_manager
+        s = session_manager.get_session(str(params.get("sessionid", "")))
+        if s is None:
+            s = session_manager.get_session(params.get("sessionid"))
+        if s is None:
+            return web.json_response({"ok": False, "msg": "找不到這個連線"}, status=400)
+        import llm
+        ok, label, greeting = llm.set_persona(s, str(params.get("persona", "")))
+        if not ok:
+            return web.json_response({"ok": False, "msg": "沒有這個人設"}, status=400)
+        try:
+            if hasattr(s, "flush_talk"):
+                s.flush_talk()
+            text = llm.strip_tags(greeting)
+            if text and hasattr(s, "put_msg_txt"):
+                s.put_msg_txt(text)
+        except Exception:
+            logger.exception("[gf-persona] 打招呼失敗（人設已切換）")
+        logger.info("[gf-persona] %s → %s", params.get("sessionid"), label)
+        return web.json_response({"ok": True, "persona": params.get("persona"), "label": label})
+    except Exception as e:
+        logger.exception("[gf-persona] /persona exception:")
+        return web.json_response({"ok": False, "msg": str(e)}, status=500)
+
+
+async def persona_list(request):
+    import llm
+    return web.json_response(llm.persona_list())
+
+
+_poll = {}   # sessionid -> [queue, 最後一次輪詢時間, session]
+
+
+async def msgpoll(request):
+    """GET /msgpoll?sessionid=…：長輪詢版的 /sse（Cloudflare 會卡住 SSE 串流）"""
+    import queue as _queue
+    from server.session_manager import session_manager
+    sid = request.query.get("sessionid", "")
+    s = session_manager.get_session(sid)
+    if s is None:
+        return web.json_response({"msgs": [], "error": "session not found"}, status=404)
+    now = time.time()
+    for k, (q, last, ss) in list(_poll.items()):          # 清掉 60 秒沒人來拿的
+        if now - last > 60:
+            try:
+                ss.msgqueues.remove(q)
+            except Exception:
+                pass
+            _poll.pop(k, None)
+    ent = _poll.get(sid)
+    if ent is None or ent[2] is not s:
+        q = _queue.Queue()
+        s.add_msgqueue(q)
+        ent = [q, now, s]
+        _poll[sid] = ent
+    ent[1] = now
+    q, msgs, t0 = ent[0], [], time.time()
+    while time.time() - t0 < 20:
+        try:
+            while True:
+                msgs.append(str(q.get_nowait()))
+        except _queue.Empty:
+            pass
+        if msgs:
+            break
+        await asyncio.sleep(0.05)
+    ent[1] = time.time()
+    return web.json_response({"msgs": msgs}, headers={"Cache-Control": "no-store"})
+
+
 def setup_gf_routes(app):
     app.router.add_post("/asr", asr)
+    app.router.add_post("/pose", pose)
+    app.router.add_get("/pose/actions", pose_actions)
+    app.router.add_post("/persona", persona)
+    app.router.add_get("/persona/list", persona_list)
+    app.router.add_get("/msgpoll", msgpoll)
+    try:
+        from server import gf_pose
+        gf_pose.patch_livetalking()
+    except Exception:
+        logger.exception("[gf-pose] 載入失敗")
     app.router.add_get("/iceservers", iceservers)
     app.router.add_get("/gate", gate)
     app.router.add_post("/gate", gate)

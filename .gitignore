@@ -27,3 +27,11 @@ models/
 *.log
 dist
 *.log
+
+# 小晴：備份、一次性修補腳本、動作影格（影格改用 data/actions_mp4 保存）
+*.bak_*
+*.orig
+patch_*.py
+data/actions/*/
+data/actions/*.mask.png
+data/lp_out/

@@ -79,6 +79,8 @@
     backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   }
   .chip:disabled { opacity: .45; cursor: default; }
+  .chip[hidden] { display: none; }
+  .chip.act { border-color: var(--glow); color: var(--glow); }
   .inputrow { display: flex; gap: 10px; max-width: 620px; width: 100%; }
   .inputrow input {
     flex: 1; min-width: 0; padding: 14px 18px; font-size: 16px; border-radius: 26px; font-family: inherit;
@@ -117,6 +119,52 @@
     .stage::after { background: linear-gradient(to bottom, rgba(0,0,0,.35) 0, rgba(0,0,0,0) 14%, rgba(0,0,0,0) 45%, rgba(0,0,0,.75) 100%); }
   }
 </style>
+<style>
+.persona-switch{display:inline-flex;gap:2px;margin-left:12px;padding:3px;border-radius:999px;
+  background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.2);vertical-align:middle}
+.persona-switch[hidden]{display:none}
+.persona-switch button{border:0;background:transparent;color:#e6e6e6;font:inherit;font-size:14px;
+  padding:4px 14px;border-radius:999px;cursor:pointer}
+.persona-switch button.on{background:#e86aa6;color:#fff;font-weight:700}
+.persona-switch button:disabled{opacity:.55;cursor:wait}
+</style>
+<script>
+/* 經過 Cloudflare 公開網址時 SSE 串流會被卡住：改用長輪詢（/msgpoll）模擬 EventSource */
+(function () {
+  if (!/trycloudflare\.com$/.test(location.hostname) && !/[?&]poll=1\b/.test(location.search)) return;
+  const wait = (ms) => new Promise(r => setTimeout(r, ms));
+  class PollSource {
+    constructor(url) {
+      const m = String(url).match(/sessionid=([^&]+)/);
+      this.url = url; this.sid = m ? m[1] : ""; this.readyState = 0;
+      this.onmessage = this.onerror = this.onopen = null; this._l = {}; this._closed = false;
+      setTimeout(() => this._loop(), 0);
+    }
+    addEventListener(t, f) { (this._l[t] = this._l[t] || []).push(f); }
+    removeEventListener(t, f) { this._l[t] = (this._l[t] || []).filter(x => x !== f); }
+    _emit(t, ev) { const h = this["on" + t]; if (h) h.call(this, ev); for (const f of (this._l[t] || [])) f.call(this, ev); }
+    close() { this._closed = true; this.readyState = 2; }
+    async _loop() {
+      while (!this._closed) {
+        try {
+          const r = await fetch("msgpoll?sessionid=" + this.sid + "&t=" + Date.now(), { cache: "no-store" });
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          const d = await r.json();
+          if (this._closed) break;
+          if (this.readyState !== 1) { this.readyState = 1; this._emit("open", new Event("open")); }
+          for (const msg of (d.msgs || [])) this._emit("message", new MessageEvent("message", { data: msg }));
+        } catch (e) {
+          if (this._closed) break;
+          this._emit("error", new Event("error"));
+          await wait(2000);
+        }
+      }
+    }
+  }
+  PollSource.CONNECTING = 0; PollSource.OPEN = 1; PollSource.CLOSED = 2;
+  window.EventSource = PollSource;
+})();
+</script>
 </head>
 <body>
 <div class="stage">
@@ -131,6 +179,7 @@
   <header>
     <h1>小晴</h1>
     <span class="ai-tag">AI 角色</span>
+    <span class="persona-switch" id="persona" hidden></span>
     <span class="status" id="status"></span>
     <button class="icon-btn on" id="intr" title="她說話時送出新的一句，會先打斷她">可打斷</button>
     <button class="icon-btn" id="stop" title="讓她停下來">停</button>
@@ -151,6 +200,13 @@
     <button class="chip" data-say="說個笑話給我聽">說個笑話</button>
     <button class="chip" data-say="今天過得怎麼樣？">今天過得好嗎</button>
     <button class="chip" data-say="陪我聊聊天好不好">陪我聊天</button>
+    <button class="chip act" data-act="stand" hidden>站起來</button>
+    <button class="chip act" data-act="sit" hidden>坐下</button>
+    <button class="chip act" data-act="wave" hidden>揮手</button>
+    <button class="chip act" data-act="thumbs_up" hidden>比讚</button>
+    <button class="chip act" data-act="clap" hidden>拍手</button>
+    <button class="chip act" data-act="look_window" hidden>看窗外</button>
+    <button class="chip act" data-act="look_turn" hidden>轉頭看窗外</button>
   </div>
   <div class="inputrow">
     <button class="mic" id="mic" title="按住說話（電腦也可以按住空白鍵）" aria-label="按住說話">
@@ -255,6 +311,30 @@ async function connect() {
   sessionid = answer.sessionid;
   await pc.setRemoteDescription(answer);
   listen();
+  initActions();
+}
+
+// ---------- 動作按鈕（伺服器有設定 data/actions/poses.json 才會出現） ----------
+async function initActions() {
+  try {
+    const r = await fetch("pose/actions");
+    if (!r.ok) return;
+    const acts = (await r.json()).actions || {};
+    document.querySelectorAll("[data-act]").forEach((b) => {
+      if (!acts[b.dataset.act]) return;
+      b.hidden = false;
+      b.onclick = () => doAction(b.dataset.act);
+    });
+  } catch (e) {}
+}
+async function doAction(act) {
+  if (!sessionid) return;
+  try {
+    const r = await fetch("pose", { method: "POST", headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ sessionid, action: act }) });
+    const j = await r.json();
+    if (!j.ok) setStatus(j.msg || "現在不能做這個動作");
+  } catch (e) { setStatus("動作送出失敗"); }
 }
 
 // ---------- 字幕：她開始念某一句（start）／念完（end） ----------
@@ -377,6 +457,45 @@ $("start").onclick = async () => {
   catch (e) { setStatus("連不上伺服器：" + e.message); }
 };
 window.addEventListener("beforeunload", () => { try { es && es.close(); pc && pc.close(); } catch (e) {} });
+</script>
+<script>
+/* 人設切換：女友｜學伴（清單來自 data/personas.json） */
+(function () {
+  const box = document.getElementById("persona");
+  let def = null, current = null, appliedSid = null, busy = false;
+  const mark = () => { for (const b of box.children) b.classList.toggle("on", b.dataset.id === current); };
+  const lock = (on) => { busy = on; for (const b of box.children) b.disabled = on; };
+  async function send(id) {
+    const r = await fetch("persona", { method: "POST", headers: { "Content-Type": "application/json" },
+                                       body: JSON.stringify({ sessionid, persona: id }) });
+    return (await r.json()).ok;
+  }
+  async function choose(id) {
+    if (busy || id === current) return;
+    if (!sessionid) { current = id; mark(); return; }   // 還沒連線：先記住，連上後自動套用
+    lock(true);
+    try { if (await send(id)) { current = id; appliedSid = sessionid; mark(); } }
+    catch (e) { console.warn("persona", e); }
+    lock(false);
+  }
+  // 連線（或重新連線）後，伺服器是預設人設；如果使用者選的不是預設，就自動補送
+  setInterval(async () => {
+    if (!sessionid || sessionid === appliedSid || busy) return;
+    appliedSid = sessionid;
+    if (current && current !== def) { lock(true); try { await send(current); } catch (e) {} lock(false); }
+  }, 1000);
+  fetch("persona/list").then(r => r.json()).then(d => {
+    def = current = d.default;
+    for (const p of d.personas) {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = p.label; b.dataset.id = p.id;
+      b.onclick = () => choose(p.id);
+      box.appendChild(b);
+    }
+    mark();
+    box.hidden = d.personas.length < 2;
+  }).catch(() => { box.hidden = true; });
+})();
 </script>
 </body>
 </html>

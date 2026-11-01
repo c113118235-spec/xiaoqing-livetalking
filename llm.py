@@ -63,10 +63,74 @@ EXAMPLES = [
 ]
 EMO_MAP = {"開心": "happy", "難過": "sad", "生氣": "angry", "溫柔": "soft", "平常": "neutral"}
 EMO_TAG = re.compile(r"[【\[]\s*(" + "|".join(EMO_MAP) + r")\s*[】\]]")
+ACT_MAP = {"站起來": "stand", "站起来": "stand", "坐下": "sit", "揮手": "wave", "挥手": "wave",
+           "比讚": "thumbs_up", "比赞": "thumbs_up", "拍手": "clap", "鼓掌": "clap"}
+ACT_TAG = re.compile(r"[【\[]\s*(" + "|".join(ACT_MAP) + r")\s*[】\]]")
+ACT_NAME = {"stand": "站起來", "sit": "坐下", "wave": "揮手", "thumbs_up": "比讚", "clap": "拍手"}
+# 使用者這樣說時，不等 LLM，直接做動作（LLM 不一定會記得加標籤）
+ACT_KEYWORDS = {
+    "wave": re.compile(r"掰掰|拜拜|再見|晚安|去睡|先走了|下次見|揮手|揮揮手|打個招呼|嗨|哈囉|bye|hello|\bhi\b", re.I),
+    "stand": re.compile(r"站起來|起來一下"),
+    "sit": re.compile(r"坐下|坐回去"),
+    # 對方分享好消息、完成事情時比讚
+    "thumbs_up": re.compile(r"比讚|按讚|考過|考好|及格|錄取|上榜|得獎|做完了|完成了|搞定|成功了|升職|加薪|我做到了|好消息"),
+    "clap": re.compile(r"拍手|鼓掌|拍拍手|恭喜|生日快樂|太棒了|慶祝|新年快樂|聖誕快樂"),
+}
 WEEKDAYS = "一二三四五六日"
 
 
-def _persona() -> str:
+def _available_actions():
+    try:
+        from server import gf_pose
+        return list(gf_pose.actions().get("actions", {}))
+    except Exception:
+        return []
+
+
+def _action_prompt(acts):
+    if not acts:
+        return ""
+    tags = "".join(f"【{ACT_NAME[a]}】" for a in acts if a in ACT_NAME)
+    return ("你可以做動作：打招呼、道別，或對方請你做動作時，在那句話的情緒標籤後面加一個動作標籤，"
+            f"只能從{tags}裡選，一次回答最多一個，不要每次都用。")
+
+
+PERSONA_FILE = "data/personas.json"
+
+
+def _personas() -> dict:
+    """讀 data/personas.json（每次都重讀，改檔案不用重開）"""
+    import json
+    try:
+        with open(PERSONA_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+            if isinstance(d.get("personas"), dict) and d["personas"]:
+                return d
+    except (OSError, ValueError):
+        pass
+    return {"default": "girlfriend", "personas": {"girlfriend": {"label": "女友"}}}
+
+
+def default_persona_id() -> str:
+    d = _personas()
+    pid = d.get("default", "girlfriend")
+    return pid if pid in d["personas"] else next(iter(d["personas"]))
+
+
+def persona_list() -> dict:
+    d = _personas()
+    return {"default": default_persona_id(),
+            "personas": [{"id": k, "label": v.get("label", k)} for k, v in d["personas"].items()]}
+
+
+def _persona_cfg(pid) -> dict:
+    return _personas()["personas"].get(pid or "", {}) or {}
+
+
+def _persona(pid=None) -> str:
+    p = _persona_cfg(pid).get("prompt")
+    if p:
+        return p.replace("{name}", NAME)
     try:
         with open("persona.txt", encoding="utf-8") as f:
             p = f.read().strip()
@@ -75,6 +139,29 @@ def _persona() -> str:
     except OSError:
         pass
     return _DEFAULT_PERSONA
+
+
+def _examples(pid=None) -> list:
+    ex = _persona_cfg(pid).get("examples")
+    if not ex:
+        return list(EXAMPLES)
+    return [{"role": e["role"], "content": e["content"].replace("{name}", NAME)} for e in ex]
+
+
+def set_persona(avatar_session, pid):
+    """切換這個連線的人設：清空對話紀錄，回傳 (ok, label, 打招呼的話)"""
+    d = _personas()
+    if pid not in d["personas"]:
+        return False, "", ""
+    cfg = d["personas"][pid]
+    greeting = (cfg.get("greeting") or "").replace("{name}", NAME)
+    avatar_session._gf_persona = pid
+    avatar_session._gf_history = [{"role": "assistant", "content": greeting}] if greeting else []
+    return True, cfg.get("label", pid), greeting
+
+
+def strip_tags(text: str) -> str:
+    return ACT_TAG.sub("", EMO_TAG.sub("", text)).strip()
 
 
 def _now_text() -> str:
@@ -86,6 +173,7 @@ def _now_text() -> str:
 
 def _clean(t: str) -> str:
     t = EMO_TAG.sub("", t)
+    t = ACT_TAG.sub("", t)
     t = re.sub(r"[*_#`>|~]+", "", t)
     t = re.sub(r"[（(][^）)]{0,20}[）)]", "", t)          # 拿掉（微笑）這類動作描述
     t = "".join(ch for ch in t if ord(ch) < 0x1F000)      # 拿掉表情符號
@@ -126,8 +214,27 @@ def llm_response(message, avatar_session: 'BaseAvatar', datainfo: dict = {}):
         if history is None:
             history = []
             avatar_session._gf_history = history
-        messages = ([{'role': 'system', 'content': _persona() + _now_text()}] + EXAMPLES + history +
+        acts = _available_actions()
+        pid = getattr(avatar_session, "_gf_persona", None) or default_persona_id()
+        examples = _examples(pid)
+        if "wave" in acts:
+            examples += [{"role": "user", "content": "我要去睡了，掰掰"},
+                         {"role": "assistant", "content": "【溫柔】【揮手】晚安，祝你做個好夢！【開心】明天見喔。"}]
+        if "thumbs_up" in acts:
+            examples += [{"role": "user", "content": "我期中考考得不錯耶"},
+                         {"role": "assistant", "content": "【開心】【比讚】太厲害了吧！【溫柔】你最近那麼努力，真的值得。"}]
+        messages = ([{'role': 'system', 'content': _persona(pid) + _action_prompt(acts) + _now_text()}] + examples + history +
                     [{'role': 'user', 'content': message}])
+
+        # 關鍵字直接觸發動作（例如說「掰掰」就揮手），不用等 LLM
+        ctl = getattr(avatar_session, "_gf_pose", None)
+        if ctl is not None:
+            for act in sorted(acts, key=lambda a: a != "thumbs_up"):   # 好消息優先比讚
+                kw = ACT_KEYWORDS.get(act)
+                if kw and kw.search(message):
+                    ok, why = ctl.request(act)
+                    logger.info(f"關鍵字動作 {act}：{why}")
+                    break
         logger.info(f"llm start: {message}")
         completion = client.chat.completions.create(
             model=model, messages=messages, stream=True,
@@ -144,6 +251,16 @@ def llm_response(message, avatar_session: 'BaseAvatar', datainfo: dict = {}):
             tags = EMO_TAG.findall(text)
             if tags:
                 emotion = EMO_MAP[tags[-1]]
+            # 動作標籤：請姿勢控制做動作，等動作做完再說這句（最多等 8 秒）
+            ctl = getattr(avatar_session, "_gf_pose", None)
+            for act in ACT_TAG.findall(text):
+                if ctl is not None:
+                    ok, why = ctl.request(ACT_MAP[act])
+                    logger.info(f"llm 動作 {act}：{why}")
+            if ctl is not None:
+                t0 = time.time()
+                while ctl.busy() and time.time() - t0 < 8:
+                    time.sleep(0.05)
             t = _clean(text)
             if t:
                 info = dict(datainfo)
