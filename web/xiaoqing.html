@@ -81,6 +81,11 @@
   .chip:disabled { opacity: .45; cursor: default; }
   .chip[hidden] { display: none; }
   .chip.act { border-color: var(--glow); color: var(--glow); }
+  /* 快捷按鈕可以收起來：只留下「快捷」開關 */
+  .chip-toggle { display: inline-flex; align-items: center; gap: 6px; color: rgba(255,255,255,.85); }
+  .chip-toggle svg { width: 12px; height: 12px; stroke: currentColor; stroke-width: 2.4; fill: none; transition: transform .2s; }
+  .chips.collapsed .chip-toggle svg { transform: rotate(-90deg); }
+  .chips.collapsed .chip:not(.chip-toggle) { display: none; }
   .inputrow { display: flex; gap: 10px; max-width: 620px; width: 100%; }
   .inputrow input {
     flex: 1; min-width: 0; padding: 14px 18px; font-size: 16px; border-radius: 26px; font-family: inherit;
@@ -165,6 +170,93 @@
   window.EventSource = PollSource;
 })();
 </script>
+<style>
+/* ───── 學伴黑板（學伴模式才出現） ───── */
+:root { --board-w: min(360px, 30vw); }
+.board {
+  position: fixed; z-index: 3; top: max(76px, calc(env(safe-area-inset-top) + 64px)); right: max(20px, env(safe-area-inset-right));
+  bottom: max(36px, calc(env(safe-area-inset-bottom) + 24px)); width: var(--board-w); min-width: 280px;
+  display: flex; flex-direction: column; gap: 12px; padding: 18px 18px 14px;
+  color: #F1EFE6; font-size: 15px;
+  background:
+    radial-gradient(120% 90% at 30% 20%, rgba(255,255,255,.07), rgba(255,255,255,0) 60%),
+    radial-gradient(90% 70% at 80% 90%, rgba(255,255,255,.04), rgba(255,255,255,0) 60%),
+    #22372D;
+  border: 10px solid #6E4A2C; border-radius: 12px;
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,.35), inset 0 0 40px rgba(0,0,0,.45), 0 18px 40px rgba(0,0,0,.45);
+  transform: translateX(0); opacity: 1; transition: transform .35s ease, opacity .35s ease;
+}
+.board[hidden] { display: flex; transform: translateX(calc(100% + 40px)); opacity: 0; pointer-events: none; }
+.board::after {          /* 粉筆槽 */
+  content: ""; position: absolute; left: -10px; right: -10px; bottom: -22px; height: 12px;
+  background: #5A3B22; border-radius: 0 0 8px 8px; box-shadow: 0 6px 12px rgba(0,0,0,.35);
+}
+.board * { font-family: inherit; }
+.board .chalk { text-shadow: 0 0 1px rgba(255,255,255,.55), 0 0 6px rgba(255,255,255,.12); }
+.board-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.board-head h2 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 2px; }
+.board-head .date { font-size: 13px; color: rgba(241,239,230,.65); }
+.board label.goal { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: rgba(241,239,230,.6); }
+.board input, .board button { color: inherit; }
+.board .goal input {
+  width: 100%; padding: 4px 0 6px; border: 0; border-bottom: 1px dashed rgba(241,239,230,.45);
+  background: transparent; font-size: 17px; font-weight: 700; outline: none; color: #F1EFE6;
+}
+.board .goal input::placeholder { color: rgba(241,239,230,.35); font-weight: 400; }
+.board-progress { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: rgba(241,239,230,.75); }
+.board-progress .bar { height: 8px; border-radius: 4px; background: rgba(241,239,230,.14); overflow: hidden; }
+.board-progress .bar i { display: block; height: 100%; width: 0; background: #EED77A; border-radius: 4px; transition: width .4s; }
+.board-list { flex: 1; min-height: 60px; overflow-y: auto; margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.board-list li { display: flex; align-items: flex-start; gap: 10px; padding: 8px 2px; border-bottom: 1px solid rgba(241,239,230,.1); }
+.board-list .empty { color: rgba(241,239,230,.45); border: 0; font-size: 14px; line-height: 1.6; }
+.board-list .ck {
+  flex-shrink: 0; width: 22px; height: 22px; margin-top: 1px; border-radius: 5px; cursor: pointer; padding: 0;
+  border: 2px solid rgba(241,239,230,.75); background: transparent; display: flex; align-items: center; justify-content: center;
+}
+.board-list .ck svg { width: 14px; height: 14px; stroke: #EED77A; stroke-width: 3; fill: none; opacity: 0; }
+.board-list li.done .ck { border-color: #EED77A; }
+.board-list li.done .ck svg { opacity: 1; }
+.board-list .txt { flex: 1; min-width: 0; font-size: 16px; line-height: 1.4; word-break: break-word; }
+.board-list li.done .txt { text-decoration: line-through; color: rgba(241,239,230,.45); }
+.board-list .due { flex-shrink: 0; font-size: 12px; padding: 2px 8px; border-radius: 10px; border: 1px solid rgba(241,239,230,.35); color: rgba(241,239,230,.75); white-space: nowrap; }
+.board-list .due.over { border-color: #F2998C; color: #F2998C; }
+.board-list .due.today { border-color: #F3B76E; color: #F3B76E; }
+.board-list .due.soon { border-color: #EED77A; color: #EED77A; }
+.board-list li.done .due { opacity: .45; }
+.board-list .del { flex-shrink: 0; border: 0; background: transparent; cursor: pointer; font-size: 18px; line-height: 1; padding: 2px 4px; color: rgba(241,239,230,.4); }
+.board-list .del:hover { color: #F2998C; }
+@media (hover: hover) { .board-list .del { opacity: 0; } .board-list li:hover .del { opacity: 1; } }
+.board-add { display: flex; gap: 6px; }
+.board-add input {
+  min-width: 0; padding: 9px 10px; border-radius: 8px; border: 1px solid rgba(241,239,230,.3);
+  background: rgba(0,0,0,.18); font-size: 14px; outline: none; color-scheme: dark;
+}
+.board-add input[type=text] { flex: 1; }
+.board-add input[type=date] { width: 132px; flex-shrink: 0; }
+.board-add input:focus { border-color: rgba(238,215,122,.8); }
+.board-add button {
+  flex-shrink: 0; width: 40px; border-radius: 8px; border: 1px solid #EED77A; background: transparent;
+  color: #EED77A; font-size: 22px; line-height: 1; cursor: pointer;
+}
+.board-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.board-foot button {
+  padding: 8px 14px; border-radius: 18px; border: 1px solid rgba(241,239,230,.5); background: transparent;
+  font-size: 13px; cursor: pointer;
+}
+.board-foot button:disabled { opacity: .45; cursor: default; }
+.board-foot small { font-size: 11px; color: rgba(241,239,230,.45); text-align: right; }
+body.board-on .captions, body.board-on .chips, body.board-on .inputrow, body.board-on .hint {
+  max-width: min(620px, calc(100vw - var(--board-w) - 90px));
+}
+header { flex-wrap: wrap; row-gap: 8px; }
+header h1, header .ai-tag, header .icon-btn, .persona-switch button { white-space: nowrap; }
+/* 直式螢幕（手機）：黑板改成從下方滑上來，預設收起 */
+@media (max-aspect-ratio: 1/1), (max-width: 760px) {
+  .board { top: auto; left: 12px; right: 12px; bottom: 26px; width: auto; min-width: 0; max-height: 64vh; }
+  .board[hidden] { transform: translateY(calc(100% + 40px)); }
+  body.board-on .captions, body.board-on .chips, body.board-on .inputrow, body.board-on .hint { max-width: none; }
+}
+</style>
 </head>
 <body>
 <div class="stage">
@@ -180,6 +272,7 @@
     <h1>小晴</h1>
     <span class="ai-tag">AI 角色</span>
     <span class="persona-switch" id="persona" hidden></span>
+    <button class="icon-btn" id="boardBtn" hidden title="打開或收起讀書黑板">黑板</button>
     <span class="status" id="status"></span>
     <button class="icon-btn on" id="intr" title="她說話時送出新的一句，會先打斷她">可打斷</button>
     <button class="icon-btn" id="stop" title="讓她停下來">停</button>
@@ -196,7 +289,8 @@
     </div>
   </div>
 
-  <div class="chips">
+  <div class="chips collapsed" id="chips">
+    <button class="chip chip-toggle" id="chipToggle" type="button" aria-expanded="false" title="展開或收起快捷按鈕">快捷<svg viewBox="0 0 12 12"><path d="M2.5 4.5L6 8l3.5-3.5"/></svg></button>
     <button class="chip" data-say="說個笑話給我聽">說個笑話</button>
     <button class="chip" data-say="今天過得怎麼樣？">今天過得好嗎</button>
     <button class="chip" data-say="陪我聊聊天好不好">陪我聊天</button>
@@ -209,14 +303,30 @@
     <button class="chip act" data-act="look_turn" hidden>轉頭看窗外</button>
   </div>
   <div class="inputrow">
-    <button class="mic" id="mic" title="按住說話（電腦也可以按住空白鍵）" aria-label="按住說話">
+    <button class="mic" id="mic" title="點一下開始說話，說完會自動送出；也可以按住說話（電腦可用空白鍵）" aria-label="說話">
       <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
     </button>
     <input id="text" placeholder="輸入想說的話…" autocomplete="off">
     <button class="send" id="send">送出</button>
   </div>
-  <div class="hint" id="hint">按住麥克風說話，放開就送出（電腦可按住空白鍵）</div>
+  <div class="hint" id="hint">點一下麥克風開始說話，說完停一下就會送出；也可以按住說話（電腦可用空白鍵）</div>
 </div>
+
+<aside class="board" id="board" hidden aria-label="讀書黑板">
+  <div class="board-head chalk"><h2>讀書黑板</h2><span class="date" id="boardDate"></span></div>
+  <label class="goal chalk">今日目標<input id="boardGoal" maxlength="80" placeholder="例如：讀完資料結構第 3 章"></label>
+  <div class="board-progress chalk"><span id="boardProg">完成 0 / 0</span><div class="bar"><i id="boardBar"></i></div></div>
+  <ul class="board-list chalk" id="boardList"></ul>
+  <form class="board-add" id="boardAdd">
+    <input type="text" id="boardText" maxlength="60" placeholder="新增作業或進度…" aria-label="作業內容" autocomplete="off">
+    <input type="date" id="boardDue" aria-label="截止日（可不填）" title="截止日（可不填）">
+    <button type="submit" aria-label="加入">+</button>
+  </form>
+  <div class="board-foot">
+    <button type="button" id="boardRemind">請學伴提醒我</button>
+    <small>內容只存在這台裝置的瀏覽器</small>
+  </div>
+</aside>
 
 <script>
 // 網址參數：?mode=chat 讓 LLM 回答（要先設定好 LLM）；預設 echo = 她照念你打的字
@@ -383,46 +493,93 @@ $("stop").onclick = () => {
   fetch("interrupt_talk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionid }) });
 };
 
-// ---------- 語音輸入：按住錄音 → /asr 轉文字 → 跟打字一樣送出 ----------
+// ---------- 語音輸入：點一下或按住錄音 → /asr 轉文字 → 跟打字一樣送出 ----------
 // 麥克風只能在 https 或 localhost 用；http://192.168.x.x 會被瀏覽器擋掉
-let rec = null, chunks = [], recStart = 0, stream = null, holding = false;
+// 兩種用法：點一下 → 開始錄，講完停頓約 1 秒自動送出（或再點一下送出）；按住 → 放開就送出
+let rec = null, chunks = [], recStart = 0, stream = null;
+let recording = false, starting = false, pressAt = 0, tapMode = false, cancelled = false;
+let vad = null;                                   // 偵測講完了沒（音量）
+const HOLD_MS = 350;                              // 按超過這麼久才算「按住」
+const SILENCE_MS = 1100, NO_SPEECH_MS = 7000, MAX_MS = 30000;
 const canMic = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
 if (!canMic) {
   $("mic").classList.add("busy");
   $("hint").textContent = "這個網址不能用麥克風：請用 http://localhost:8010（SSH 轉接）或 https 開啟";
 }
 
-async function micDown() {
-  if (!canMic || holding || !sessionid || $("mic").classList.contains("busy")) return;
-  holding = true;
+function startVad() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC(), src = ctx.createMediaStreamSource(stream), an = ctx.createAnalyser();
+    an.fftSize = 1024; src.connect(an);
+    const buf = new Float32Array(an.fftSize);
+    let noise = 0.01, spoke = false, lastVoice = performance.now(), frames = 0;
+    const timer = setInterval(() => {
+      an.getFloatTimeDomainData(buf);
+      let sum = 0; for (const v of buf) sum += v * v;
+      const rms = Math.sqrt(sum / buf.length), now = performance.now();
+      if (frames++ < 8) { noise = Math.max(noise, rms); return; }        // 前 0.4 秒量背景音
+      if (rms > Math.max(0.02, noise * 2.5)) { spoke = true; lastVoice = now; }
+      if (!tapMode) return;                                               // 按住模式由放開決定
+      if (spoke && now - lastVoice > SILENCE_MS) stopRec();               // 講完了
+      else if (!spoke && now - recStart > NO_SPEECH_MS) { cancelled = true; stopRec(); setStatus("沒聽到聲音，再點一下麥克風試試"); }
+    }, 50);
+    vad = { stop() { clearInterval(timer); try { ctx.close(); } catch (e) {} }, spoke: () => spoke };
+  } catch (e) { vad = null; }
+}
+
+async function startRec() {
+  if (!canMic || recording || starting || !sessionid || $("mic").classList.contains("busy")) return;
+  starting = true;
   try {
     stream = stream || await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-  } catch (e) { holding = false; setStatus("沒有麥克風權限"); return; }
-  if (!holding) return;                         // 還在要權限時就放開了
+  } catch (e) { starting = false; setStatus("沒有麥克風權限"); return; }
+  starting = false;
   if (interrupt) $("stop").click();             // 你一開口，她就先停下來聽
   const type = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((t) => MediaRecorder.isTypeSupported(t)) || "";
-  chunks = [];
+  chunks = []; cancelled = false;
   rec = new MediaRecorder(stream, type ? { mimeType: type } : {});
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   rec.onstop = sendVoice;
   rec.start();
-  recStart = performance.now();
+  recording = true; recStart = performance.now();
   $("mic").classList.add("rec");
-  setStatus("聽你說…");
-  setTimeout(() => holding && micUp(), 30000);  // 最長 30 秒
+  setStatus(tapMode ? "聽你說…（說完停一下就會送出）" : "聽你說…（放開就送出）");
+  startVad();
+  const thisRec = rec;
+  setTimeout(() => { if (recording && rec === thisRec) stopRec(); }, MAX_MS);   // 最長 30 秒
 }
 
-function micUp() {
-  if (!holding) return;
-  holding = false;
+function stopRec() {
+  if (!recording) return;
+  recording = false; tapMode = false;
   $("mic").classList.remove("rec");
+  if (vad) { rec._spoke = vad.spoke(); vad.stop(); vad = null; }
   if (rec && rec.state !== "inactive") rec.stop();
 }
 
+// 按下：沒在錄就開始錄；點一下模式錄音中再按一下就送出
+async function pressDown() {
+  if (recording && tapMode) { stopRec(); return; }
+  if (recording) return;
+  pressAt = performance.now(); tapMode = false;
+  await startRec();
+}
+// 放開：按得夠久 → 按住模式，送出；很快放開 → 點一下模式，繼續錄
+function pressUp() {
+  if (!pressAt) return;
+  const held = performance.now() - pressAt;
+  pressAt = 0;
+  if (!recording && !starting) return;
+  if (held >= HOLD_MS) stopRec();
+  else { tapMode = true; setStatus("聽你說…（說完停一下就會送出，或再點一下）"); }
+}
+
 async function sendVoice() {
+  if (cancelled) { cancelled = false; return; }
   const ms = performance.now() - recStart;
   const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
-  if (ms < 400 || blob.size < 1000) { setStatus("太短了，按住久一點再說"); return; }
+  if (ms < 300 || blob.size < 800) { setStatus("太短了，再說一次？"); return; }   // 自己按停的就交給語音辨識判斷
   $("mic").classList.add("busy");
   setStatus("聽懂中…");
   try {
@@ -440,14 +597,14 @@ async function sendVoice() {
   }
 }
 
-$("mic").addEventListener("pointerdown", (e) => { e.preventDefault(); $("mic").setPointerCapture(e.pointerId); micDown(); });
-$("mic").addEventListener("pointerup", micUp);
-$("mic").addEventListener("pointercancel", micUp);
+$("mic").addEventListener("pointerdown", (e) => { e.preventDefault(); $("mic").setPointerCapture(e.pointerId); pressDown(); });
+$("mic").addEventListener("pointerup", pressUp);
+$("mic").addEventListener("pointercancel", pressUp);
 $("mic").addEventListener("contextmenu", (e) => e.preventDefault());
 document.addEventListener("keydown", (e) => {
-  if (e.code === "Space" && !e.repeat && document.activeElement !== $("text")) { e.preventDefault(); micDown(); }
+  if (e.code === "Space" && !e.repeat && document.activeElement !== $("text")) { e.preventDefault(); pressDown(); }
 });
-document.addEventListener("keyup", (e) => { if (e.code === "Space" && document.activeElement !== $("text")) { e.preventDefault(); micUp(); } });
+document.addEventListener("keyup", (e) => { if (e.code === "Space" && document.activeElement !== $("text")) { e.preventDefault(); pressUp(); } });
 
 // 瀏覽器規定要使用者點一下才能自動播放聲音，所以連線放在這個按鈕
 $("start").onclick = async () => {
@@ -463,7 +620,11 @@ window.addEventListener("beforeunload", () => { try { es && es.close(); pc && pc
 (function () {
   const box = document.getElementById("persona");
   let def = null, current = null, appliedSid = null, busy = false;
-  const mark = () => { for (const b of box.children) b.classList.toggle("on", b.dataset.id === current); };
+  const boardOf = {};   // 哪些人設有黑板
+  const mark = () => {
+    for (const b of box.children) b.classList.toggle("on", b.dataset.id === current);
+    window.dispatchEvent(new CustomEvent("xq-persona", { detail: { id: current, board: !!boardOf[current] } }));
+  };
   const lock = (on) => { busy = on; for (const b of box.children) b.disabled = on; };
   async function send(id) {
     const r = await fetch("persona", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -487,6 +648,7 @@ window.addEventListener("beforeunload", () => { try { es && es.close(); pc && pc
   fetch("persona/list").then(r => r.json()).then(d => {
     def = current = d.default;
     for (const p of d.personas) {
+      boardOf[p.id] = !!p.board;
       const b = document.createElement("button");
       b.type = "button"; b.textContent = p.label; b.dataset.id = p.id;
       b.onclick = () => choose(p.id);
@@ -495,6 +657,202 @@ window.addEventListener("beforeunload", () => { try { es && es.close(); pc && pc
     mark();
     box.hidden = d.personas.length < 2;
   }).catch(() => { box.hidden = true; });
+})();
+</script>
+<script>
+/* 學伴黑板：學伴模式才出現；內容存在這台裝置的瀏覽器，變動時同步到伺服器（/board），
+   學伴會在切換時、之後每 30 分鐘提醒快到期的作業（/board/say），打勾完成時稱讚你 */
+(function () {
+  const KEY = "xq_board_v1", OPEN_KEY = "xq_board_open";
+  const AUTO_EVERY = 30 * 60 * 1000;        // 自動提醒間隔
+  const AFTER_GREET = 9000;                 // 切到學伴後，等她打完招呼再提醒
+  const $b = (id) => document.getElementById(id);
+  const board = $b("board"), btn = $b("boardBtn");
+  const narrow = () => matchMedia("(max-aspect-ratio: 1/1), (max-width: 760px)").matches;
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+  };
+  let data = load(), isStudy = false, open = store.get(OPEN_KEY) !== "0";
+  let syncedSid = null, remindedSid = null, lastAuto = 0;
+
+  function load() {
+    try {
+      const d = JSON.parse(store.get(KEY));
+      if (d && Array.isArray(d.tasks)) return { goal: String(d.goal || ""), tasks: d.tasks };
+    } catch (e) {}
+    return { goal: "", tasks: [] };
+  }
+  function save() { store.set(KEY, JSON.stringify(data)); }
+
+  // ---------- 日期 ----------
+  const today = () => { const t = new Date(); t.setHours(0, 0, 0, 0); return t; };
+  function daysLeft(due) {
+    if (!due) return null;
+    const d = new Date(due + "T00:00:00");
+    return isNaN(d) ? null : Math.round((d - today()) / 86400000);
+  }
+  function dueLabel(due) {
+    const n = daysLeft(due);
+    if (n === null) return null;
+    const d = new Date(due + "T00:00:00"), md = `${d.getMonth() + 1}/${d.getDate()}`;
+    if (n < 0) return { t: `逾期 ${-n} 天`, c: "over" };
+    if (n === 0) return { t: "今天", c: "today" };
+    if (n === 1) return { t: "明天", c: "soon" };
+    if (n === 2) return { t: "後天", c: "soon" };
+    return { t: md, c: "" };
+  }
+
+  // ---------- 畫面 ----------
+  function render() {
+    const t = new Date();
+    $b("boardDate").textContent = `${t.getMonth() + 1}/${t.getDate()} 星期${"日一二三四五六"[t.getDay()]}`;
+    if (document.activeElement !== $b("boardGoal")) $b("boardGoal").value = data.goal;
+    const done = data.tasks.filter((x) => x.done).length, all = data.tasks.length;
+    $b("boardProg").textContent = all ? `完成 ${done} / ${all}` : "還沒有作業";
+    $b("boardBar").style.width = all ? `${Math.round(done / all * 100)}%` : "0";
+
+    const list = $b("boardList");
+    list.textContent = "";
+    if (!all) {
+      const li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = "把作業、考試或今天想讀的進度寫在下面，學伴會幫你記著，快到期時提醒你。";
+      list.appendChild(li);
+      return;
+    }
+    const order = [...data.tasks].sort((a, b) => {
+      if (a.done !== b.done) return a.done ? 1 : -1;
+      const da = daysLeft(a.due), db = daysLeft(b.due);
+      if (da === null || db === null) return (da === null) - (db === null);
+      return da - db;
+    });
+    for (const task of order) {
+      const li = document.createElement("li");
+      if (task.done) li.className = "done";
+      const ck = document.createElement("button");
+      ck.type = "button"; ck.className = "ck";
+      ck.setAttribute("aria-label", task.done ? "標成未完成" : "標成完成");
+      ck.innerHTML = '<svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 4.5"/></svg>';
+      ck.onclick = () => toggle(task.id);
+      const txt = document.createElement("span");
+      txt.className = "txt"; txt.textContent = task.text;
+      li.append(ck, txt);
+      const lab = dueLabel(task.due);
+      if (lab) {
+        const due = document.createElement("span");
+        due.className = "due " + lab.c; due.textContent = lab.t; due.title = "截止日 " + task.due;
+        li.appendChild(due);
+      }
+      const del = document.createElement("button");
+      del.type = "button"; del.className = "del"; del.textContent = "×"; del.setAttribute("aria-label", "刪除");
+      del.onclick = () => { data.tasks = data.tasks.filter((x) => x.id !== task.id); changed(); };
+      li.appendChild(del);
+      list.appendChild(li);
+    }
+  }
+
+  function show() {
+    const on = isStudy && open;
+    board.hidden = !on;
+    btn.hidden = !isStudy;
+    btn.classList.toggle("on", on);
+    document.body.classList.toggle("board-on", on && !narrow());
+  }
+
+  // ---------- 同步與學伴開口 ----------
+  async function sync() {
+    if (!sessionid) return;
+    try {
+      await fetch("board", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionid, goal: data.goal, tasks: data.tasks.map(({ text, due, done }) => ({ text, due, done })) }) });
+      syncedSid = sessionid;
+    } catch (e) { console.warn("board sync", e); }
+  }
+  async function say(event, extra) {
+    if (!sessionid || !isStudy) return false;
+    try {
+      const r = await fetch("board/say", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionid, event, ...extra }) });
+      return (await r.json()).ok;
+    } catch (e) { return false; }
+  }
+  const talking = () => document.getElementById("ui").classList.contains("talking");
+
+  let syncTimer = null;
+  function changed() { save(); render(); clearTimeout(syncTimer); syncTimer = setTimeout(sync, 300); }
+
+  async function toggle(id) {
+    const task = data.tasks.find((x) => x.id === id);
+    if (!task) return;
+    task.done = !task.done;
+    save(); render();
+    clearTimeout(syncTimer);
+    await sync();
+    if (task.done) say("done", { text: task.text });
+  }
+
+  // ---------- 輸入 ----------
+  $b("boardAdd").onsubmit = (e) => {
+    e.preventDefault();
+    const text = $b("boardText").value.trim();
+    if (!text) { $b("boardText").focus(); return; }
+    data.tasks.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+                      text: text.slice(0, 60), due: $b("boardDue").value || "", done: false });
+    if (data.tasks.length > 30) data.tasks = data.tasks.slice(-30);
+    $b("boardText").value = ""; $b("boardDue").value = "";
+    changed();
+  };
+  $b("boardGoal").addEventListener("input", () => { data.goal = $b("boardGoal").value.slice(0, 80); save(); clearTimeout(syncTimer); syncTimer = setTimeout(sync, 800); });
+  $b("boardGoal").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) e.target.blur(); });
+  // 黑板裡打字時，空白鍵不要觸發「按住說話」
+  board.addEventListener("keydown", (e) => e.stopPropagation());
+  board.addEventListener("keyup", (e) => e.stopPropagation());
+  $b("boardRemind").onclick = async () => {
+    $b("boardRemind").disabled = true;
+    await sync();
+    await say("remind", { manual: true });
+    setTimeout(() => { $b("boardRemind").disabled = false; }, 3000);
+  };
+  btn.onclick = () => { open = !open; store.set(OPEN_KEY, open ? "1" : "0"); show(); };
+
+  // ---------- 跟著人設切換 ----------
+  window.addEventListener("xq-persona", (e) => {
+    const was = isStudy;
+    isStudy = !!(e.detail && e.detail.board);
+    if (isStudy && !was) { if (narrow()) open = false; remindedSid = null; }
+    show();
+  });
+  matchMedia("(max-aspect-ratio: 1/1), (max-width: 760px)").addEventListener("change", show);
+
+  // 每秒檢查：新的連線要先同步；剛切到學伴就排一次提醒；之後每 30 分鐘提醒一次
+  setInterval(async () => {
+    if (!sessionid) return;
+    if (sessionid !== syncedSid) await sync();
+    if (!isStudy) return;
+    if (remindedSid !== sessionid) {
+      remindedSid = sessionid;
+      lastAuto = Date.now() - AUTO_EVERY + AFTER_GREET;   // 9 秒後提醒第一次
+    }
+    if (Date.now() - lastAuto >= AUTO_EVERY && !talking()) {
+      lastAuto = Date.now();
+      say("remind", { manual: false });
+    }
+  }, 1000);
+  setInterval(render, 10 * 60 * 1000);   // 跨過午夜時更新「今天／明天」
+
+  render(); show();
+})();
+</script>
+<script>
+/* 快捷按鈕收起／展開（記在這台裝置的瀏覽器） */
+(function () {
+  const box = document.getElementById("chips"), btn = document.getElementById("chipToggle");
+  let open = false;
+  try { open = localStorage.getItem("xq_chips_open") === "1"; } catch (e) {}
+  const apply = () => { box.classList.toggle("collapsed", !open); btn.setAttribute("aria-expanded", String(open)); };
+  btn.onclick = () => { open = !open; try { localStorage.setItem("xq_chips_open", open ? "1" : "0"); } catch (e) {} apply(); };
+  apply();
 })();
 </script>
 </body>

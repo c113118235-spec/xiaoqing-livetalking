@@ -120,7 +120,8 @@ def default_persona_id() -> str:
 def persona_list() -> dict:
     d = _personas()
     return {"default": default_persona_id(),
-            "personas": [{"id": k, "label": v.get("label", k)} for k, v in d["personas"].items()]}
+            "personas": [{"id": k, "label": v.get("label", k), "board": bool(v.get("board"))}
+                         for k, v in d["personas"].items()]}
 
 
 def _persona_cfg(pid) -> dict:
@@ -158,6 +159,18 @@ def set_persona(avatar_session, pid):
     avatar_session._gf_persona = pid
     avatar_session._gf_history = [{"role": "assistant", "content": greeting}] if greeting else []
     return True, cfg.get("label", pid), greeting
+
+
+def _board_prompt(avatar_session, pid) -> str:
+    """學伴黑板的內容（personas.json 裡 "board": true 的人設才會加）"""
+    if not _persona_cfg(pid).get("board"):
+        return ""
+    try:
+        from server import gf_board
+        return gf_board.board_prompt(avatar_session)
+    except Exception:
+        logger.exception("board prompt 失敗")
+        return ""
 
 
 def strip_tags(text: str) -> str:
@@ -223,7 +236,7 @@ def llm_response(message, avatar_session: 'BaseAvatar', datainfo: dict = {}):
         if "thumbs_up" in acts:
             examples += [{"role": "user", "content": "我期中考考得不錯耶"},
                          {"role": "assistant", "content": "【開心】【比讚】太厲害了吧！【溫柔】你最近那麼努力，真的值得。"}]
-        messages = ([{'role': 'system', 'content': _persona(pid) + _action_prompt(acts) + _now_text()}] + examples + history +
+        messages = ([{'role': 'system', 'content': _persona(pid) + _action_prompt(acts) + _board_prompt(avatar_session, pid) + _now_text()}] + examples + history +
                     [{'role': 'user', 'content': message}])
 
         # 關鍵字直接觸發動作（例如說「掰掰」就揮手），不用等 LLM

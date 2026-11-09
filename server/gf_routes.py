@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import html
 import os
+import re
 import time
 
 import aiohttp
@@ -27,6 +28,21 @@ from utils.logger import logger
 ASR_URL = os.getenv("ASR_URL", "http://127.0.0.1:8001/v1/audio/transcriptions")
 ASR_KEY = os.getenv("ASR_API_KEY", "")
 MAX_BYTES = 5 * 1024 * 1024
+ASR_PROMPT = os.getenv("ASR_PROMPT", "以下是一段用繁體中文說的話。")
+# Whisper 在安靜或很短的錄音上常會憑空補出這些句子，辨識完直接刪掉
+ASR_HALLUCINATIONS = re.compile(
+    r"thank you( very much| so much)?( for watching)?|thanks for watching|please subscribe|"
+    r"subtitles? by[^。！？.!?]*|amara\.org[^。！？.!?]*|"
+    r"(謝謝|感謝)(大家)?(觀看|收看|收聽)|請不吝點贊[^。！？]*|(記得)?訂閱[^。！？]*頻道[^。！？]*|"
+    r"字幕(由|提供)[^。！？]*|明鏡與點點欄目",
+    re.I)
+
+
+def clean_asr(text: str) -> str:
+    t = ASR_HALLUCINATIONS.sub("", text or "")
+    t = re.sub(r"[\s,，、]+([.。!！?？])", r"\1", t)             # 「好, .」→「好.」
+    t = re.sub(r"^[\s,，.。!！?？、]+|[\s,，、]+$", "", t)      # 刪掉後留下的開頭標點、結尾逗號
+    return t if re.search(r"[\w\u4e00-\u9fff]", t) else ""
 
 ACCESS_CODE = os.getenv("GF_ACCESS_CODE", "")
 TURN_KEY_ID = os.getenv("CF_TURN_KEY_ID", "")
@@ -55,6 +71,8 @@ async def asr(request: web.Request):
         out.add_field("file", audio, filename=f.filename or "voice.webm",
                       content_type=f.content_type or "application/octet-stream")
         out.add_field("language", "zh")
+        out.add_field("prompt", ASR_PROMPT)          # 偏向繁體中文、少亂猜
+        out.add_field("temperature", "0")
         headers = {"Authorization": f"Bearer {ASR_KEY}"} if ASR_KEY else {}
 
         t = time.time()
@@ -65,8 +83,10 @@ async def asr(request: web.Request):
                     logger.warning(f"[gf-asr] asr 回 {r.status}: {msg}")
                     return web.json_response({"error": f"語音辨識失敗（{r.status}）"}, status=502)
                 j = await r.json()
-        text = (j.get("text") or "").strip()
-        logger.info(f"[gf-asr] {len(audio) / 1024:.0f} KB, {time.time() - t:.2f}s：{text}")
+        raw = (j.get("text") or "").strip()
+        text = clean_asr(raw)
+        logger.info(f"[gf-asr] {len(audio) / 1024:.0f} KB, {time.time() - t:.2f}s：{text}"
+                    + (f"（原始：{raw}）" if raw != text else ""))
         return web.json_response({"text": text})
     except Exception as e:
         logger.exception("[gf-asr] exception:")
@@ -213,6 +233,7 @@ async def gate(request):
 
 
 PUBLIC_PATHS = set(PUBLIC_PATHS) | {"/persona", "/persona/list", "/sse", "/msgpoll"}
+PUBLIC_PATHS |= {"/board", "/board/say"}          # 學伴黑板
 
 
 @web.middleware
@@ -340,6 +361,8 @@ def setup_gf_routes(app):
     app.router.add_post("/persona", persona)
     app.router.add_get("/persona/list", persona_list)
     app.router.add_get("/msgpoll", msgpoll)
+    from server import gf_board
+    gf_board.setup(app)                      # 學伴黑板：/board、/board/say
     try:
         from server import gf_pose
         gf_pose.patch_livetalking()
