@@ -128,10 +128,10 @@ def _persona_cfg(pid) -> dict:
     return _personas()["personas"].get(pid or "", {}) or {}
 
 
-def _persona(pid=None) -> str:
+def _persona(pid=None, name=None) -> str:
     p = _persona_cfg(pid).get("prompt")
     if p:
-        return p.replace("{name}", NAME)
+        return p.replace("{name}", name or NAME)
     try:
         with open("persona.txt", encoding="utf-8") as f:
             p = f.read().strip()
@@ -155,7 +155,7 @@ def set_persona(avatar_session, pid):
     if pid not in d["personas"]:
         return False, "", ""
     cfg = d["personas"][pid]
-    greeting = (cfg.get("greeting") or "").replace("{name}", NAME)
+    greeting = (cfg.get("greeting") or "").replace("{name}", getattr(avatar_session, "_gf_name", None) or NAME)
     avatar_session._gf_persona = pid
     avatar_session._gf_history = [{"role": "assistant", "content": greeting}] if greeting else []
     return True, cfg.get("label", pid), greeting
@@ -227,7 +227,7 @@ def llm_response(message, avatar_session: 'BaseAvatar', datainfo: dict = {}):
         if history is None:
             history = []
             avatar_session._gf_history = history
-        acts = _available_actions()
+        acts = _available_actions() if getattr(avatar_session, "_gf_pose", None) is not None else []   # 自訂學伴沒有動作
         pid = getattr(avatar_session, "_gf_persona", None) or default_persona_id()
         examples = _examples(pid)
         if "wave" in acts:
@@ -236,7 +236,7 @@ def llm_response(message, avatar_session: 'BaseAvatar', datainfo: dict = {}):
         if "thumbs_up" in acts:
             examples += [{"role": "user", "content": "我期中考考得不錯耶"},
                          {"role": "assistant", "content": "【開心】【比讚】太厲害了吧！【溫柔】你最近那麼努力，真的值得。"}]
-        messages = ([{'role': 'system', 'content': _persona(pid) + _action_prompt(acts) + _board_prompt(avatar_session, pid) + _now_text()}] + examples + history +
+        messages = ([{'role': 'system', 'content': _persona(pid, getattr(avatar_session, "_gf_name", None)) + _action_prompt(acts) + _board_prompt(avatar_session, pid) + _now_text()}] + examples + history +
                     [{'role': 'user', 'content': message}])
 
         # 關鍵字直接觸發動作（例如說「掰掰」就揮手），不用等 LLM

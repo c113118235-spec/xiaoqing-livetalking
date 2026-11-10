@@ -77,7 +77,8 @@ def build_avatar_session(sessionid:str, params:dict)->BaseAvatar:
     opt_this = copy.deepcopy(opt)
     opt_this.sessionid = sessionid
 
-    avatar_id = params.get('avatar',opt.avatar_id) 
+    from server import gf_custom
+    avatar_id = gf_custom.safe_avatar_id(params.get('avatar'), opt.avatar_id)   # 只接受預設人物或做好的自訂學伴
     opt_this.avatar_id = avatar_id
     ref_audio = params.get('refaudio','') #音色
     ref_text = params.get('reftext','')
@@ -97,6 +98,7 @@ def build_avatar_session(sessionid:str, params:dict)->BaseAvatar:
         opt_this.customopt = json.loads(custom_config)
 
     avatar_session = registry.create("avatar", opt.model, opt=opt_this, model=model, avatar=avatar_this)
+    gf_custom.after_session(avatar_session, avatar_id)                           # 自訂學伴：名字、學伴人設
     return avatar_session
 
 async def offer(request):

@@ -234,6 +234,7 @@ async def gate(request):
 
 PUBLIC_PATHS = set(PUBLIC_PATHS) | {"/persona", "/persona/list", "/sse", "/msgpoll"}
 PUBLIC_PATHS |= {"/board", "/board/say"}          # 學伴黑板
+PUBLIC_PATHS |= {"/custom/create", "/custom/status", "/custom/thumb", "/custom/delete"}   # 自訂學伴
 
 
 @web.middleware
@@ -291,6 +292,8 @@ async def persona(request):
         if s is None:
             return web.json_response({"ok": False, "msg": "找不到這個連線"}, status=400)
         import llm
+        if getattr(s, "_gf_custom", None) and not llm._persona_cfg(str(params.get("persona", ""))).get("board"):
+            return web.json_response({"ok": False, "msg": "自訂學伴只能使用學伴模式"}, status=400)
         ok, label, greeting = llm.set_persona(s, str(params.get("persona", "")))
         if not ok:
             return web.json_response({"ok": False, "msg": "沒有這個人設"}, status=400)
@@ -363,6 +366,8 @@ def setup_gf_routes(app):
     app.router.add_get("/msgpoll", msgpoll)
     from server import gf_board
     gf_board.setup(app)                      # 學伴黑板：/board、/board/say
+    from server import gf_custom
+    gf_custom.setup(app)                     # 自訂學伴：/custom/*
     try:
         from server import gf_pose
         gf_pose.patch_livetalking()
@@ -375,6 +380,8 @@ def setup_gf_routes(app):
     app.on_startup.append(_refresh_turn_loop)
     _patch_server_turn()
     _patch_bitrate()
+    from server import gf_paste
+    gf_paste.patch()
     logger.info(f"[gf-asr] /asr → {ASR_URL}")
     logger.info(f"[gf-gate] 公開網址通關碼：{'已設定' if ACCESS_CODE else '未設定（公開網址會被拒絕）'}；"
                 f"TURN：{'Cloudflare' if TURN_KEY_ID and TURN_TOKEN else '未設定（校外看不到影像）'}")

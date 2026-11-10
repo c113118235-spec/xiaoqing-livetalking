@@ -223,6 +223,8 @@ def attach(session, default_avatar):
     """在每個新連線建立後呼叫；沒有 poses.json 就什麼都不做"""
     if not enabled() or hasattr(session, "_gf_pose"):
         return
+    if str(getattr(getattr(session, "opt", None), "avatar_id", "")).startswith("custom_"):
+        return                                   # 動作影片是照小晴做的，自訂學伴不用
     try:
         session._gf_pose = PoseController(session, default_avatar)
     except Exception:

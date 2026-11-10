@@ -257,6 +257,52 @@ header h1, header .ai-tag, header .icon-btn, .persona-switch button { white-spac
   body.board-on .captions, body.board-on .chips, body.board-on .inputrow, body.board-on .hint { max-width: none; }
 }
 </style>
+<style>
+/* ───── 選擇學伴（開始畫面） ───── */
+.picker { position: fixed; inset: 0; z-index: 6; display: flex; align-items: center; justify-content: center; padding: 20px 16px;
+  background: rgba(10,8,14,.72); backdrop-filter: blur(6px); overflow-y: auto; }
+.picker[hidden] { display: none; }
+.pick-panel, .pick-form { width: min(760px, 100%); background: #1B1822; color: #FFF; border: 1px solid rgba(255,255,255,.12);
+  border-radius: 20px; padding: 28px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.pick-panel[hidden], .pick-form[hidden] { display: none; }
+.picker h2 { margin: 0 0 6px; font-size: 24px; }
+.pick-sub { margin: 0 0 20px; color: rgba(255,255,255,.6); font-size: 14px; }
+.pick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; }
+.pick-card { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 18px 12px 14px;
+  border-radius: 16px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.04); color: inherit;
+  font: inherit; cursor: pointer; text-align: center; }
+.pick-card:hover:not(.wait) { border-color: var(--glow); background: rgba(232,106,166,.10); }
+.pick-card.wait { cursor: default; opacity: .85; }
+.pick-face { width: 88px; height: 88px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 34px; font-weight: 700; background: linear-gradient(135deg, #E86AA6, #8E5BD6); overflow: hidden; }
+.pick-face img { width: 100%; height: 100%; object-fit: cover; }
+.pick-face.add { background: transparent; border: 2px dashed rgba(255,255,255,.4); color: rgba(255,255,255,.7); }
+.pick-card b { font-size: 16px; }
+.pick-card small { font-size: 12px; color: rgba(255,255,255,.55); line-height: 1.4; }
+.pick-card .bar { width: 80%; height: 5px; border-radius: 3px; background: rgba(255,255,255,.12); overflow: hidden; }
+.pick-card .bar i { display: block; height: 100%; width: 0; background: var(--glow); transition: width .5s; }
+.pick-card .del { position: absolute; top: 6px; right: 8px; border: 0; background: transparent; color: rgba(255,255,255,.45);
+  font-size: 18px; cursor: pointer; padding: 2px 6px; }
+.pick-card .del:hover { color: #F2998C; }
+.pick-card .tag { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,.3); color: rgba(255,255,255,.7); }
+.pick-form { display: flex; flex-direction: column; gap: 14px; }
+.pick-form .drop { display: flex; align-items: center; justify-content: center; min-height: 180px; border-radius: 14px;
+  border: 2px dashed rgba(255,255,255,.3); cursor: pointer; overflow: hidden; color: rgba(255,255,255,.65); font-size: 14px; text-align: center; padding: 10px; }
+.pick-form .drop img { max-height: 240px; max-width: 100%; border-radius: 10px; }
+.pick-form .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: rgba(255,255,255,.7); }
+.pick-form .field input { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.2); background: rgba(0,0,0,.25);
+  color: #FFF; font: inherit; font-size: 15px; outline: none; }
+.pick-form .field input:focus { border-color: var(--glow); }
+.pick-form .ck { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; line-height: 1.45; cursor: pointer; }
+.pick-form .ck input { width: 18px; height: 18px; margin-top: 1px; accent-color: #E86AA6; flex-shrink: 0; }
+.pick-form .note { margin: 0; font-size: 12px; line-height: 1.6; color: rgba(255,255,255,.55); }
+.pick-form .row { display: flex; gap: 10px; justify-content: flex-end; }
+.pick-form .row button { padding: 10px 20px; border-radius: 22px; border: 1px solid rgba(255,255,255,.3); background: transparent;
+  color: #FFF; font: inherit; font-size: 15px; cursor: pointer; }
+.pick-form .row button.primary { background: var(--accent); border-color: var(--accent); font-weight: 700; }
+.pick-form .row button:disabled { opacity: .5; cursor: default; }
+.pick-form .err { margin: 0; min-height: 18px; font-size: 13px; color: #F2998C; }
+</style>
 </head>
 <body>
 <div class="stage">
@@ -265,7 +311,27 @@ header h1, header .ai-tag, header .icon-btn, .persona-switch button { white-spac
   <audio id="audio" autoplay></audio>
 </div>
 
-<button class="start" id="start"><span>點一下，開始跟小晴聊天</span></button>
+<div class="picker" id="start" role="dialog" aria-label="選擇學伴">
+  <div class="pick-panel" id="pickPanel">
+    <h2>想跟誰聊？</h2>
+    <p class="pick-sub">選一位，點一下就開始（瀏覽器需要你點一下才能播放聲音）</p>
+    <div class="pick-grid" id="pickGrid">
+      <button type="button" class="pick-card" id="pickDefault"><span class="pick-face">晴</span><b>小晴</b><small>預設角色<br>可切換女友／學伴</small></button>
+      <button type="button" class="pick-card" id="pickAdd"><span class="pick-face add">＋</span><b>用照片建立學伴</b><small>需要本人同意<br>製作約幾分鐘</small></button>
+    </div>
+  </div>
+  <form class="pick-form" id="pickForm" hidden>
+    <h2>用照片建立學伴</h2>
+    <label class="drop" id="pickDrop"><input type="file" id="pickFile" accept="image/jpeg,image/png,image/webp" hidden><img id="pickPreview" alt="照片預覽" hidden><span id="pickDropText">點這裡選照片<br>正面、臉部清楚、光線充足，只有一個人</span></label>
+    <label class="field">學伴的名字<input id="pickName" maxlength="12" placeholder="例如：阿哲" autocomplete="off"></label>
+    <label class="ck"><input type="checkbox" id="pickC1">照片是我本人，或已取得照片中人物的同意</label>
+    <label class="ck"><input type="checkbox" id="pickC2">照片中的人已滿 18 歲</label>
+    <label class="ck"><input type="checkbox" id="pickC3">不是名人、公眾人物或政治人物</label>
+    <p class="note">照片只用來製作這位學伴，存在實驗室的伺服器，只有你這台裝置看得到；畫面會標示「AI 生成」，你可以隨時刪除。自訂學伴只能當讀書夥伴，暫時使用小晴的聲音。</p>
+    <p class="err" id="pickErr"></p>
+    <div class="row"><button type="button" id="pickCancel">取消</button><button type="submit" class="primary" id="pickSubmit">開始製作</button></div>
+  </form>
+</div>
 
 <div class="ui" id="ui">
   <header>
@@ -415,7 +481,8 @@ async function connect() {
   });
   const r = await fetch("offer", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+    body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type,
+                           avatar: window.XQ_CUSTOM ? window.XQ_CUSTOM.id : undefined }),   // 自訂學伴
   });
   const answer = await r.json();
   sessionid = answer.sessionid;
@@ -426,6 +493,7 @@ async function connect() {
 
 // ---------- 動作按鈕（伺服器有設定 data/actions/poses.json 才會出現） ----------
 async function initActions() {
+  if (window.XQ_CUSTOM) return;          // 動作影片是照小晴做的，自訂學伴不顯示
   try {
     const r = await fetch("pose/actions");
     if (!r.ok) return;
@@ -607,12 +675,7 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("keyup", (e) => { if (e.code === "Space" && document.activeElement !== $("text")) { e.preventDefault(); pressUp(); } });
 
 // 瀏覽器規定要使用者點一下才能自動播放聲音，所以連線放在這個按鈕
-$("start").onclick = async () => {
-  $("start").hidden = true;
-  setStatus(MODE === "echo" ? "複讀模式：她會照念你打的字" : "");
-  try { await connect(); }
-  catch (e) { setStatus("連不上伺服器：" + e.message); }
-};
+// （開始畫面在下方「選擇學伴」的程式裡：選好人物才連線）
 window.addEventListener("beforeunload", () => { try { es && es.close(); pc && pc.close(); } catch (e) {} });
 </script>
 <script>
@@ -621,6 +684,13 @@ window.addEventListener("beforeunload", () => { try { es && es.close(); pc && pc
   const box = document.getElementById("persona");
   let def = null, current = null, appliedSid = null, busy = false;
   const boardOf = {};   // 哪些人設有黑板
+  let customOnly = false;   // 自訂學伴只能當學伴
+  const forceStudy = () => {
+    const pid = Object.keys(boardOf).find((k) => boardOf[k]);
+    if (pid) { current = pid; mark(); }
+    box.hidden = true;
+  };
+  window.addEventListener("xq-avatar", (e) => { customOnly = !!e.detail; if (customOnly) forceStudy(); });
   const mark = () => {
     for (const b of box.children) b.classList.toggle("on", b.dataset.id === current);
     window.dispatchEvent(new CustomEvent("xq-persona", { detail: { id: current, board: !!boardOf[current] } }));
@@ -656,6 +726,7 @@ window.addEventListener("beforeunload", () => { try { es && es.close(); pc && pc
     }
     mark();
     box.hidden = d.personas.length < 2;
+    if (customOnly) forceStudy();
   }).catch(() => { box.hidden = true; });
 })();
 </script>
@@ -853,6 +924,148 @@ window.addEventListener("beforeunload", () => { try { es && es.close(); pc && pc
   const apply = () => { box.classList.toggle("collapsed", !open); btn.setAttribute("aria-expanded", String(open)); };
   btn.onclick = () => { open = !open; try { localStorage.setItem("xq_chips_open", open ? "1" : "0"); } catch (e) {} apply(); };
   apply();
+})();
+</script>
+<script>
+/* 選擇學伴：小晴，或用照片做的自訂學伴（清單只存在這台裝置的瀏覽器） */
+(function () {
+  const CKEY = "xq_custom_v1";
+  const $p = (id) => document.getElementById(id);
+  const store = {
+    get() { try { const v = JSON.parse(localStorage.getItem(CKEY)); return Array.isArray(v) ? v : []; } catch (e) { return []; } },
+    set(v) { try { localStorage.setItem(CKEY, JSON.stringify(v)); } catch (e) {} },
+  };
+  let mine = store.get(), statusOf = {}, pollTimer = null;
+
+  function begin(item) {
+    window.XQ_CUSTOM = item || null;
+    $p("start").hidden = true;
+    if (item) {
+      document.querySelector("header h1").textContent = item.name;
+      document.querySelector("header .ai-tag").textContent = "AI 生成";
+      document.title = item.name + "｜AI 學伴";
+    }
+    window.dispatchEvent(new CustomEvent("xq-avatar", { detail: item || null }));
+    setStatus(MODE === "echo" ? "複讀模式：她會照念你打的字" : "");
+    connect().catch((e) => setStatus("連不上伺服器：" + e.message));
+  }
+
+  function statusText(s) {
+    if (!s) return "讀取中…";
+    if (s.status === "ready") return s.mode === "static" ? "準備好了（靜態版）" : "準備好了";
+    if (s.status === "queued") return "排隊中…";
+    if (s.status === "animating") return "讓照片動起來…";
+    if (s.status === "building") return `製作中 ${s.progress || 0}%`;
+    if (s.status === "failed") return "失敗：" + (s.error || "請換一張照片");
+    return "找不到了";
+  }
+
+  function render() {
+    const grid = $p("pickGrid");
+    grid.querySelectorAll(".custom").forEach((n) => n.remove());
+    for (const item of mine) {
+      const s = statusOf[item.id];
+      const ready = s && s.status === "ready";
+      const card = document.createElement("div");
+      card.className = "pick-card custom" + (ready ? "" : " wait");
+      card.tabIndex = ready ? 0 : -1;
+      card.setAttribute("role", "button");
+      const face = document.createElement("span");
+      face.className = "pick-face";
+      if (s && (ready || s.status === "building")) {
+        const img = document.createElement("img");
+        img.src = "custom/thumb?id=" + encodeURIComponent(item.id); img.alt = "";
+        face.appendChild(img);
+      } else face.textContent = (item.name || "?").slice(0, 1);
+      const name = document.createElement("b"); name.textContent = item.name;
+      const tag = document.createElement("span"); tag.className = "tag"; tag.textContent = "自訂學伴";
+      const st = document.createElement("small"); st.textContent = statusText(s);
+      card.append(face, name, tag, st);
+      if (s && ["queued", "animating", "building"].includes(s.status)) {
+        const bar = document.createElement("div"); bar.className = "bar";
+        const i = document.createElement("i"); i.style.width = (s.progress || 2) + "%";
+        bar.appendChild(i); card.appendChild(bar);
+      }
+      const del = document.createElement("button");
+      del.type = "button"; del.className = "del"; del.textContent = "×"; del.title = "刪除這位學伴";
+      del.onclick = async (e) => {
+        e.stopPropagation();
+        if (!confirm(`刪除「${item.name}」？照片和做好的學伴都會從伺服器刪掉。`)) return;
+        try {
+          const r = await fetch("custom/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                    body: JSON.stringify({ id: item.id, key: item.key }) });
+          const j = await r.json();
+          if (!j.ok && r.status !== 404) { alert(j.msg || "刪除失敗"); return; }
+        } catch (err) { alert("刪除失敗：" + err.message); return; }
+        mine = mine.filter((x) => x.id !== item.id); store.set(mine); render();
+      };
+      card.appendChild(del);
+      if (ready) {
+        card.onclick = () => begin(item);
+        card.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); begin(item); } };
+      }
+      grid.insertBefore(card, $p("pickAdd"));
+    }
+  }
+
+  async function refresh() {
+    let busy = false;
+    await Promise.all(mine.map(async (item) => {
+      try {
+        const r = await fetch("custom/status?id=" + encodeURIComponent(item.id));
+        const j = await r.json();
+        if (r.status === 404) { statusOf[item.id] = { status: "missing" }; return; }
+        statusOf[item.id] = j;
+        if (["queued", "animating", "building"].includes(j.status)) busy = true;
+      } catch (e) { busy = true; }
+    }));
+    mine = mine.filter((x) => !statusOf[x.id] || statusOf[x.id].status !== "missing");
+    store.set(mine);
+    render();
+    clearTimeout(pollTimer);
+    if (busy && !$p("start").hidden) pollTimer = setTimeout(refresh, 3000);
+  }
+
+  // ---------- 建立表單 ----------
+  let file = null;
+  const showForm = (on) => { $p("pickForm").hidden = !on; $p("pickPanel").hidden = on; $p("pickErr").textContent = ""; };
+  $p("pickDefault").onclick = () => begin(null);
+  $p("pickAdd").onclick = () => showForm(true);
+  $p("pickCancel").onclick = () => showForm(false);
+  $p("pickForm").addEventListener("change", () => { if ($p("pickErr").textContent !== "上傳中…") $p("pickErr").textContent = ""; });
+  $p("pickFile").onchange = () => {
+    file = $p("pickFile").files[0] || null;
+    if (!file) return;
+    if (file.size > 12 * 1024 * 1024) { $p("pickErr").textContent = "照片太大了（上限 12 MB）"; file = null; return; }
+    const url = URL.createObjectURL(file);
+    $p("pickPreview").src = url; $p("pickPreview").hidden = false; $p("pickDropText").hidden = true;
+    $p("pickErr").textContent = "";
+  };
+  $p("pickForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const name = $p("pickName").value.trim();
+    if (!file) { $p("pickErr").textContent = "請先選一張照片"; return; }
+    if (!name) { $p("pickErr").textContent = "請幫學伴取個名字"; $p("pickName").focus(); return; }
+    if (!($p("pickC1").checked && $p("pickC2").checked && $p("pickC3").checked)) { $p("pickErr").textContent = "三個同意事項都要勾選"; return; }
+    const fd = new FormData();
+    fd.append("photo", file, file.name || "photo.jpg");
+    fd.append("name", name);
+    ["consent_self", "consent_adult", "consent_public"].forEach((k) => fd.append(k, "1"));
+    $p("pickSubmit").disabled = true; $p("pickErr").textContent = "上傳中…";
+    try {
+      const r = await fetch("custom/create", { method: "POST", body: fd });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.msg || r.status);
+      mine.push({ id: j.id, key: j.key, name: name.slice(0, 12) });
+      store.set(mine);
+      statusOf[j.id] = { status: "queued", progress: 0 };
+      file = null; $p("pickForm").reset(); $p("pickPreview").hidden = true; $p("pickDropText").hidden = false;
+      showForm(false); refresh();
+    } catch (err) {
+      $p("pickErr").textContent = "上傳失敗：" + err.message;
+    } finally { $p("pickSubmit").disabled = false; }
+  };
+  render(); refresh();
 })();
 </script>
 </body>

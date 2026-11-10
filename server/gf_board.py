@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 from aiohttp import web
 
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 TZ = ZoneInfo("Asia/Taipei")
 MAX_TASKS = 30
 MAX_TEXT = 60
