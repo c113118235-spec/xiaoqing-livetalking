@@ -235,6 +235,24 @@ async def gate(request):
 PUBLIC_PATHS = set(PUBLIC_PATHS) | {"/persona", "/persona/list", "/sse", "/msgpoll"}
 PUBLIC_PATHS |= {"/board", "/board/say"}          # 學伴黑板
 PUBLIC_PATHS |= {"/custom/create", "/custom/status", "/custom/thumb", "/custom/delete"}   # 自訂學伴
+PUBLIC_PATHS |= {"/tts/voices"}                                                          # 選聲音
+
+TW_TTS_URLS = [u.strip() for u in os.getenv(
+    "TW_TTS_URLS", "http://127.0.0.1:8007/v1/audio/speech,http://127.0.0.1:8006/v1/audio/speech").split(",") if u.strip()]
+
+
+async def tts_voices(request):
+    """開始畫面用：台灣華語語音（IndexTTS / BreezyVoice，第一個連得到的）有哪些聲音；都連不到就回空的"""
+    for tw in TW_TTS_URLS:
+        url = tw.rsplit("/audio/speech", 1)[0] + "/voices"
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as s:
+                async with s.get(url) as r:
+                    data = await r.json()
+            return web.json_response({"engine": "breezy", "url": tw, "voices": data.get("voices", {})})
+        except Exception as e:
+            logger.warning(f"[gf-voice] {url} 連不到：{e}")
+    return web.json_response({"engine": "tts2", "voices": {}})
 
 
 @web.middleware
@@ -364,6 +382,7 @@ def setup_gf_routes(app):
     app.router.add_post("/persona", persona)
     app.router.add_get("/persona/list", persona_list)
     app.router.add_get("/msgpoll", msgpoll)
+    app.router.add_get("/tts/voices", tts_voices)
     from server import gf_board
     gf_board.setup(app)                      # 學伴黑板：/board、/board/say
     from server import gf_custom

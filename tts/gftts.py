@@ -1,7 +1,10 @@
-"""小晴的情緒語音：呼叫 DGX 上已經在跑的 tts2（CosyVoice3），取代微軟 EdgeTTS。
+"""小晴的情緒語音。
 
-- 情緒：llm.py 把【開心】等標籤轉成 datainfo['tts']['emotion']，這裡傳給 tts2
-- tts2 失敗或太慢時，自動改用 tts（Breeze2-VITS）
+- 依序試 TW_TTS_URLS：IndexTTS-2.5（8007，tools/indextts）→ BreezyVoice（8006，tools/breezy）
+  兩個都用開始畫面選的聲音（female / male）＋情緒
+- 都失敗 → tts2（CosyVoice3，8005）→ 再失敗 → tts（Breeze2-VITS，8002）
+- 情緒：llm.py 把【開心】等標籤轉成 datainfo['tts']['emotion']
+- TW_TTS_URLS 設成空字串就跳過台灣華語語音；想先用 BreezyVoice 就把順序對調
 - 網址可用 --TTS_SERVER 指定 tts2，預設 http://127.0.0.1:8005（LiveTalking 用 --network host 跑，所以連得到）
 
 用法：python app.py ... --tts gftts
@@ -20,6 +23,8 @@ from utils.logger import logger
 
 from .base_tts import BaseTTS, State
 
+TW_TTS_URLS = [u.strip() for u in os.getenv(
+    "TW_TTS_URLS", "http://127.0.0.1:8007/v1/audio/speech,http://127.0.0.1:8006/v1/audio/speech").split(",") if u.strip()]
 TTS2_URL = os.getenv("TTS2_URL", "http://127.0.0.1:8005/v1/audio/speech")
 TTS_URL = os.getenv("TTS_URL", "http://127.0.0.1:8002/v1/audio/speech")     # 備援：Breeze2-VITS
 TIMEOUT = float(os.getenv("TTS2_TIMEOUT", "15"))
@@ -28,6 +33,14 @@ TIMEOUT = float(os.getenv("TTS2_TIMEOUT", "15"))
 @register("tts", "gftts")
 class GfTTS(BaseTTS):
     def _fetch(self, text: str, emotion: str) -> bytes | None:
+        voice = getattr(self.parent, "_gf_voice", "female")
+        for tw in TW_TTS_URLS:
+            try:
+                r = requests.post(tw, json={"input": text, "voice": voice, "emotion": emotion}, timeout=TIMEOUT)
+                r.raise_for_status()
+                return r.content
+            except Exception as e:
+                logger.warning(f"台灣華語語音 {tw} 失敗，試下一個：{e}")
         url = TTS2_URL
         if getattr(self.opt, "TTS_SERVER", ""):
             url = self.opt.TTS_SERVER.rstrip("/") + "/v1/audio/speech"

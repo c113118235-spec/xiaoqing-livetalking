@@ -285,6 +285,13 @@ header h1, header .ai-tag, header .icon-btn, .persona-switch button { white-spac
   font-size: 18px; cursor: pointer; padding: 2px 6px; }
 .pick-card .del:hover { color: #F2998C; }
 .pick-card .tag { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,.3); color: rgba(255,255,255,.7); }
+.pick-voice { display: flex; align-items: center; gap: 8px; margin: 0 0 18px; font-size: 14px; color: rgba(255,255,255,.7); flex-wrap: wrap; }
+.pick-voice button { padding: 7px 16px; border-radius: 18px; border: 1px solid rgba(255,255,255,.25); background: transparent;
+  color: #FFF; font: inherit; cursor: pointer; }
+.pick-voice button.on { background: var(--accent); border-color: var(--accent); font-weight: 700; }
+.pick-voice button:disabled { opacity: .4; cursor: default; }
+.pick-voice small { font-size: 12px; color: rgba(255,255,255,.45); }
+.pick-voice[hidden] { display: none; }
 .pick-form { display: flex; flex-direction: column; gap: 14px; }
 .pick-form .drop { display: flex; align-items: center; justify-content: center; min-height: 180px; border-radius: 14px;
   border: 2px dashed rgba(255,255,255,.3); cursor: pointer; overflow: hidden; color: rgba(255,255,255,.65); font-size: 14px; text-align: center; padding: 10px; }
@@ -315,6 +322,12 @@ header h1, header .ai-tag, header .icon-btn, .persona-switch button { white-spac
   <div class="pick-panel" id="pickPanel">
     <h2>想跟誰聊？</h2>
     <p class="pick-sub">選一位，點一下就開始（瀏覽器需要你點一下才能播放聲音）</p>
+    <div class="pick-voice" id="pickVoice" role="radiogroup" aria-label="聲音" hidden>
+      <span>聲音</span>
+      <button type="button" data-v="female" role="radio">女聲</button>
+      <button type="button" data-v="male" role="radio">男聲</button>
+      <small id="pickVoiceNote">台灣口音，會跟著情緒變化</small>
+    </div>
     <div class="pick-grid" id="pickGrid">
       <button type="button" class="pick-card" id="pickDefault"><span class="pick-face">晴</span><b>小晴</b><small>預設角色<br>可切換女友／學伴</small></button>
       <button type="button" class="pick-card" id="pickAdd"><span class="pick-face add">＋</span><b>用照片建立學伴</b><small>需要本人同意<br>製作約幾分鐘</small></button>
@@ -327,7 +340,7 @@ header h1, header .ai-tag, header .icon-btn, .persona-switch button { white-spac
     <label class="ck"><input type="checkbox" id="pickC1">照片是我本人，或已取得照片中人物的同意</label>
     <label class="ck"><input type="checkbox" id="pickC2">照片中的人已滿 18 歲</label>
     <label class="ck"><input type="checkbox" id="pickC3">不是名人、公眾人物或政治人物</label>
-    <p class="note">照片只用來製作這位學伴，存在實驗室的伺服器，只有你這台裝置看得到；畫面會標示「AI 生成」，你可以隨時刪除。自訂學伴只能當讀書夥伴，暫時使用小晴的聲音。</p>
+    <p class="note">照片只用來製作這位學伴，存在實驗室的伺服器，只有你這台裝置看得到；畫面會標示「AI 生成」，你可以隨時刪除。自訂學伴只能當讀書夥伴，聲音用上面選的女聲或男聲。</p>
     <p class="err" id="pickErr"></p>
     <div class="row"><button type="button" id="pickCancel">取消</button><button type="submit" class="primary" id="pickSubmit">開始製作</button></div>
   </form>
@@ -482,7 +495,8 @@ async function connect() {
   const r = await fetch("offer", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type,
-                           avatar: window.XQ_CUSTOM ? window.XQ_CUSTOM.id : undefined }),   // 自訂學伴
+                           avatar: window.XQ_CUSTOM ? window.XQ_CUSTOM.id : undefined,     // 自訂學伴
+                           voice: window.XQ_VOICE || undefined }),                         // 女聲／男聲
   });
   const answer = await r.json();
   sessionid = answer.sessionid;
@@ -924,6 +938,30 @@ window.addEventListener("beforeunload", () => { try { es && es.close(); pc && pc
   const apply = () => { box.classList.toggle("collapsed", !open); btn.setAttribute("aria-expanded", String(open)); };
   btn.onclick = () => { open = !open; try { localStorage.setItem("xq_chips_open", open ? "1" : "0"); } catch (e) {} apply(); };
   apply();
+})();
+</script>
+<script>
+/* 選聲音：女聲／男聲（BreezyVoice 有哪些聲音就顯示哪些；選擇存在這台裝置） */
+(function () {
+  const VKEY = "xq_voice";
+  const box = document.getElementById("pickVoice");
+  const btns = [...box.querySelectorAll("button")];
+  let pick = "female";
+  try { pick = localStorage.getItem(VKEY) || "female"; } catch (e) {}
+  function apply() {
+    btns.forEach((b) => { const on = b.dataset.v === pick; b.classList.toggle("on", on); b.setAttribute("aria-checked", on); });
+    window.XQ_VOICE = pick;
+  }
+  btns.forEach((b) => b.onclick = () => { if (b.disabled) return; pick = b.dataset.v; try { localStorage.setItem(VKEY, pick); } catch (e) {} apply(); });
+  fetch("tts/voices").then((r) => r.json()).then((d) => {
+    const have = d.voices || {};
+    if (d.engine !== "breezy" || !Object.keys(have).length) { window.XQ_VOICE = undefined; return; }
+    btns.forEach((b) => { b.disabled = !have[b.dataset.v]; if (b.disabled) b.title = "這個聲音還沒有錄音"; });
+    if (!have[pick]) pick = have.female ? "female" : Object.keys(have)[0];
+    if (!have.male) document.getElementById("pickVoiceNote").textContent = "台灣口音；男聲還在準備中";
+    box.hidden = false;
+    apply();
+  }).catch(() => { window.XQ_VOICE = undefined; });
 })();
 </script>
 <script>

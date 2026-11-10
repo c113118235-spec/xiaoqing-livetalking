@@ -380,12 +380,16 @@ def _decontaminate(cut, src=None):
 
 
 def _fade_cut_sides(cut, bbox) -> None:
-    """證件照的肩膀常被照片左右邊切成一直線：碰到邊的那一側慢慢淡出，看起來比較自然"""
+    """證件照的肩膀、手臂常被照片左右邊切成一直線：碰到邊的那一側只做很窄的柔邊，
+    手臂幾乎完整保留（CUSTOM_SIDE_FADE，人寬度的比例，預設 0.015；設 0 完全不淡出）"""
     import numpy as np
     from PIL import Image
     a = np.asarray(cut.getchannel("A")).astype(np.float32)
     h, w = a.shape
-    ramp = max(8, int((bbox[2] - bbox[0]) * 0.08))
+    frac = float(os.getenv("CUSTOM_SIDE_FADE", "0.015"))
+    if frac <= 0:
+        return
+    ramp = max(3, int((bbox[2] - bbox[0]) * frac))
     xs = np.arange(w, dtype=np.float32)
     f = np.ones(w, np.float32)
     if a[:, :2].max() > 40:
