@@ -245,6 +245,22 @@
 }
 .board-foot button:disabled { opacity: .45; cursor: default; }
 .board-foot small { font-size: 11px; color: rgba(241,239,230,.45); text-align: right; }
+.board-foot .btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.board-note { margin: 0; font-size: 12px; line-height: 1.5; color: #EED77A; }
+.board-note[hidden] { display: none; }
+.el-dlg { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+  background: rgba(10,8,14,.6); padding: 20px; }
+.el-dlg[hidden] { display: none; }
+.el-dlg .box { width: min(520px, 100%); background: #1B1822; color: #FFF; border: 1px solid rgba(255,255,255,.14);
+  border-radius: 18px; padding: 24px 26px; display: flex; flex-direction: column; gap: 12px; font-size: 14px; line-height: 1.6; }
+.el-dlg h3 { margin: 0; font-size: 19px; }
+.el-dlg ol { margin: 0; padding-left: 20px; }
+.el-dlg .bm { align-self: center; display: inline-block; padding: 10px 22px; border-radius: 22px; background: var(--accent);
+  color: #FFF; font-weight: 700; text-decoration: none; cursor: grab; }
+.el-dlg small { color: rgba(255,255,255,.55); font-size: 12px; }
+.el-dlg .row { display: flex; justify-content: flex-end; }
+.el-dlg .row button { padding: 8px 20px; border-radius: 18px; border: 1px solid rgba(255,255,255,.3); background: transparent;
+  color: #FFF; font: inherit; cursor: pointer; }
 body.board-on .captions, body.board-on .chips, body.board-on .inputrow, body.board-on .hint {
   max-width: min(620px, calc(100vw - var(--board-w) - 90px));
 }
@@ -401,11 +417,27 @@ header h1, header .ai-tag, header .icon-btn, .persona-switch button { white-spac
     <input type="date" id="boardDue" aria-label="截止日（可不填）" title="截止日（可不填）">
     <button type="submit" aria-label="加入">+</button>
   </form>
+  <p class="board-note" id="boardNote" hidden></p>
   <div class="board-foot">
-    <button type="button" id="boardRemind">請學伴提醒我</button>
+    <div class="btns"><button type="button" id="boardRemind">請學伴提醒我</button><button type="button" id="boardEl" title="把高科大教學平台的作業、考試列到黑板">同步教學平台</button></div>
     <small>內容只存在這台裝置的瀏覽器</small>
   </div>
 </aside>
+
+<div class="el-dlg" id="elDlg" hidden role="dialog" aria-label="同步高科大教學平台">
+  <div class="box">
+    <h3>把教學平台的作業、考試列到黑板</h3>
+    <ol>
+      <li>把下面的粉紅色按鈕<b>拖到瀏覽器的書籤列</b>（書籤列沒出現就按 Ctrl+Shift+B）。</li>
+      <li>到<b>高科大教學平台</b>照常登入。</li>
+      <li>登入後按書籤列上的「小晴同步」，等它讀完每門課，就會自動打開小晴並把作業、考試放上黑板。</li>
+    </ol>
+    <a class="bm" id="elBookmarklet" href="#" onclick="return false">小晴同步</a>
+    <small>只讀這學期每門課的作業、考試名稱和截止日，不讀內容、不會繳交或改任何東西；你的帳號密碼只在你自己的瀏覽器，小晴拿不到。
+      讀取時會依序「進入」每門課，教學平台會記一筆進入課程，跟你自己點進去一樣。小晴的網址如果換了，要重新拖一次書籤。</small>
+    <div class="row"><button type="button" id="elClose">關閉</button></div>
+  </div>
+</div>
 
 <script>
 // 網址參數：?mode=chat 讓 LLM 回答（要先設定好 LLM）；預設 echo = 她照念你打的字
@@ -745,6 +777,121 @@ window.addEventListener("beforeunload", () => { try { es && es.close(); pc && pc
 })();
 </script>
 <script>
+/* 高科大教學平台同步：
+   1) 「小晴同步」書籤在教學平台（你自己登入）執行：讀這學期每門課的作業、考試 → 用網址 #elimport= 打開小晴
+   2) 小晴打開時讀 #elimport，合併到黑板（存在這台裝置的瀏覽器），然後把網址上的資料清掉
+   帳號密碼、登入狀態都留在教學平台那一頁，小晴伺服器只收到作業名稱和日期 */
+function xqElSync(XQ) {
+  (async () => {
+    if (!/(^|\.)elearning\.nkust\.edu\.tw$/.test(location.hostname)) {
+      alert("請先到高科大教學平台（elearning.nkust.edu.tw）登入，再按「小晴同步」。");
+      return;
+    }
+    const tip = document.createElement("div");
+    tip.style.cssText = "position:fixed;right:20px;bottom:20px;z-index:2147483647;background:#1B1822;color:#fff;padding:14px 18px;border-radius:14px;font:15px/1.5 sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.4);max-width:360px";
+    document.body.appendChild(tip);
+    const say = (t) => { tip.textContent = "小晴同步：" + t; };
+    const getJ = async (u, o) => { const r = await fetch(u, o); if (!r.ok) throw new Error(u.split("?")[0] + " " + r.status); return r.json(); };
+    const listOf = (d) => (d && d.data && Array.isArray(d.data.list)) ? d.data.list : (Array.isArray(d && d.data) ? d.data : []);
+    try {
+      say("讀取課程清單…");
+      let cs = [];
+      for (let off = 0; off < 300; off += 15) {
+        const d = await getJ("/api/v1/courses?offset=" + off + "&size=15&purpose=learn&sort=new&apply_status=registered&direction=desc&keyword=");
+        const page = Array.isArray(d.data) ? d.data : [];
+        cs = cs.concat(page);
+        if (page.length < 15) break;
+      }
+      const sem = (c) => ((String(c.name || "").match(/^(\d{4})_/) || [])[1] || "");
+      const cur = cs.map(sem).filter(Boolean).sort().pop() || "";
+      const target = cs.filter((c) => sem(c) === cur && c.my_role !== "teacher");
+      const short = (n) => String(n || "").replace(/^\d+_\d+_/, "").replace(/[(（].*$/, "").replace(/_.*$/, "").trim();
+      const clean = (t) => String(t || "").replace(/【([^】]*)】/g, "$1 ").replace(/\s+/g, " ").trim();
+      const isDone = (x) => (x.answer_process && x.answer_process !== "none") || ["done", "finished", "submitted", "complete"].includes(x.status) || x.score != null;
+      const items = [];
+      for (let i = 0; i < target.length; i++) {
+        const c = target[i];
+        say("讀取第 " + (i + 1) + " / " + target.length + " 門課：" + short(c.name));
+        await fetch("/api/v1/courses/" + c.course_id + "/log", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        const lists = [];
+        for (const kind of ["assignment", "exam"]) {
+          try { lists.push(...listOf(await getJ("/api/v1/" + kind)).map((x) => Object.assign({ _kind: kind }, x))); } catch (e) { }
+        }
+        for (const x of lists) {
+          if (Number(x.course_id) !== Number(c.course_id)) continue;
+          const close = String(x.answer_close_time || x.close_time || x.end_time || "");
+          const due = /^\d{4}-\d{2}-\d{2}/.test(close) && !close.startsWith("9999") ? close.slice(0, 10) : "";
+          const exam = x._kind === "exam" || /exam|test|quiz/i.test(String(x.type || ""));
+          items.push({ k: "el:" + (x.exam_id || x.id || (c.course_id + ":" + x.title)), text: (short(c.name) + "｜" + (exam ? "考試 " : "") + clean(x.title)).slice(0, 60), due: due, done: !!isDone(x) });
+        }
+      }
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const days = (d) => d ? Math.round((new Date(d + "T00:00:00") - today) / 86400000) : null;
+      const keep = items.filter((t) => { const n = days(t.due); return t.done ? (n === null || n >= 0) : (n === null || n >= -14); });
+      say("讀到 " + keep.filter((t) => !t.done).length + " 項未完成，打開小晴…");
+      const json = JSON.stringify({ v: 1, at: Date.now(), sem: cur, items: keep });
+      const b64 = btoa(unescape(encodeURIComponent(json))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      const w = window.open(XQ + "#elimport=" + b64, "xiaoqing");
+      if (!w) say("瀏覽器擋住了新分頁，請允許彈出視窗後再按一次。");
+      setTimeout(() => tip.remove(), 6000);
+    } catch (e) {
+      say("失敗了：" + e.message + "（確認已登入教學平台）");
+      setTimeout(() => tip.remove(), 10000);
+    }
+  })();
+}
+
+(function () {
+  const KEY = "xq_board_v1";
+  const $e = (id) => document.getElementById(id);
+
+  /* 讀網址上的 #elimport，合併進黑板 */
+  const m = location.hash.match(/elimport=([A-Za-z0-9_-]+)/);
+  if (m) {
+    history.replaceState(null, "", location.pathname + location.search);
+    try {
+      let b = m[1].replace(/-/g, "+").replace(/_/g, "/");
+      while (b.length % 4) b += "=";
+      const pack = JSON.parse(decodeURIComponent(escape(atob(b))));
+      const items = Array.isArray(pack.items) ? pack.items.slice(0, 40) : [];
+      let data = { goal: "", tasks: [] };
+      try { const d = JSON.parse(localStorage.getItem(KEY)); if (d && Array.isArray(d.tasks)) data = d; } catch (e) { }
+      const mine = data.tasks.filter((t) => !String(t.id).startsWith("el:"));
+      const old = Object.fromEntries(data.tasks.filter((t) => String(t.id).startsWith("el:")).map((t) => [t.id, t]));
+      const imported = items.filter((x) => x && x.k && x.text).map((x) => ({
+        id: String(x.k).slice(0, 60), text: String(x.text).slice(0, 60),
+        due: /^\d{4}-\d{2}-\d{2}$/.test(x.due || "") ? x.due : "",
+        done: !!x.done || !!(old[x.k] && old[x.k].done),
+      }));
+      imported.sort((a, b) => (a.done - b.done) || String(a.due || "9").localeCompare(String(b.due || "9")));
+      data.tasks = mine.concat(imported.slice(0, Math.max(0, 30 - mine.length)));
+      localStorage.setItem(KEY, JSON.stringify(data));
+      const left = imported.filter((t) => !t.done).length;
+      window.XQ_EL_NOTE = `已從教學平台同步 ${imported.length} 項（未完成 ${left} 項）`;
+    } catch (e) {
+      window.XQ_EL_NOTE = "教學平台的資料讀不懂，請再按一次「小晴同步」";
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const note = $e("boardNote");
+    if (window.XQ_EL_NOTE && note) {
+      note.textContent = window.XQ_EL_NOTE + "；切到「學伴」就能在黑板看到。";
+      note.hidden = false;
+      setTimeout(() => { note.hidden = true; }, 20000);
+      const sub = document.querySelector(".pick-sub");
+      if (sub) sub.textContent = "✔ " + window.XQ_EL_NOTE + "。選一位開始，切到學伴模式就會列在黑板上。";
+    }
+    const url = location.origin + location.pathname;
+    $e("elBookmarklet").href = "javascript:" + encodeURIComponent("(" + xqElSync.toString() + ")(" + JSON.stringify(url) + ")");
+    $e("boardEl").onclick = () => { $e("elDlg").hidden = false; };
+    $e("elClose").onclick = () => { $e("elDlg").hidden = true; };
+    $e("elDlg").addEventListener("click", (ev) => { if (ev.target === $e("elDlg")) $e("elDlg").hidden = true; });
+    $e("elDlg").addEventListener("keydown", (ev) => ev.stopPropagation());
+  });
+})();
+</script>
+<script>
 /* 學伴黑板：學伴模式才出現；內容存在這台裝置的瀏覽器，變動時同步到伺服器（/board），
    學伴會在切換時、之後每 30 分鐘提醒快到期的作業（/board/say），打勾完成時稱讚你 */
 (function () {
@@ -925,6 +1072,8 @@ window.addEventListener("beforeunload", () => { try { es && es.close(); pc && pc
     }
   }, 1000);
   setInterval(render, 10 * 60 * 1000);   // 跨過午夜時更新「今天／明天」
+  // 另一個分頁（例如教學平台同步打開的小晴）改了黑板 → 這裡也更新
+  window.addEventListener("storage", (e) => { if (e.key === KEY) { data = load(); render(); clearTimeout(syncTimer); syncTimer = setTimeout(sync, 300); } });
 
   render(); show();
 })();
