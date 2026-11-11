@@ -99,7 +99,8 @@ def build_avatar_session(sessionid:str, params:dict)->BaseAvatar:
 
     avatar_session = registry.create("avatar", opt.model, opt=opt_this, model=model, avatar=avatar_this)
     gf_custom.after_session(avatar_session, avatar_id)                           # 自訂學伴：名字、學伴人設
-    avatar_session._gf_voice = params.get('voice') if params.get('voice') in ('female', 'male') else 'female'   # 開始畫面選的聲音
+    from server import gf_voice
+    avatar_session._gf_voice = gf_voice.valid_voice(params.get('voice'))          # 開始畫面選的聲音（內建或自己錄的）
     return avatar_session
 
 async def offer(request):
