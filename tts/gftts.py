@@ -3,6 +3,11 @@
 - 依序試 TW_TTS_URLS：IndexTTS-2.5（8007，tools/indextts）→ BreezyVoice（8006，tools/breezy）
   兩個都用開始畫面選的聲音（female / male）＋情緒
 - 都失敗 → tts2（CosyVoice3，8005）→ 再失敗 → tts（Breeze2-VITS，8002）
+- 學校 iAI 平台的語音（/aihub/v1/audio/speech，模型 Speaker）可以排在最前面試用：
+  開始畫面選「iAI 聲音」就用它（失敗回到本機語音）；
+  或 data/tts.json 寫 {"order": ["iai", "local"]}，不管選哪個聲音都先用 iAI，失敗才回到上面的本機語音；
+  不用重開，每句都會讀這個檔（改了馬上生效）。iAI 目前只有一個聲音、不吃情緒參數。
+  金鑰用跟 LLM 一樣的 IAI_API_KEY；IAI_TTS_MODEL（預設 Speaker）、IAI_TTS_VOICE（預設 default）
 - 情緒：llm.py 把【開心】等標籤轉成 datainfo['tts']['emotion']
 - TW_TTS_URLS 設成空字串就跳過台灣華語語音；想先用 BreezyVoice 就把順序對調
 - 網址可用 --TTS_SERVER 指定 tts2，預設 http://127.0.0.1:8005（LiveTalking 用 --network host 跑，所以連得到）
@@ -28,12 +33,111 @@ TW_TTS_URLS = [u.strip() for u in os.getenv(
 TTS2_URL = os.getenv("TTS2_URL", "http://127.0.0.1:8005/v1/audio/speech")
 TTS_URL = os.getenv("TTS_URL", "http://127.0.0.1:8002/v1/audio/speech")     # 備援：Breeze2-VITS
 TIMEOUT = float(os.getenv("TTS2_TIMEOUT", "15"))
+IAI_TTS_URL = os.getenv("IAI_TTS_URL", os.getenv("IAI_BASE_URL", "https://www.iai.nkust.edu.tw/aihub/v1").rstrip("/") + "/audio/speech")
+IAI_TTS_MODEL = os.getenv("IAI_TTS_MODEL", "Speaker")
+IAI_TTS_VOICE = os.getenv("IAI_TTS_VOICE", "default")
+IAI_TTS_TIMEOUT = float(os.getenv("IAI_TTS_TIMEOUT", "20"))
+TTS_CONF = os.getenv("TTS_CONF", os.path.join("data", "tts.json"))
+_conf = {"mtime": None, "order": ["local"], "iai": {}}
+
+
+def _load_conf():
+    """data/tts.json（改了馬上生效）：
+      "order": ["iai", "local"]   不管選哪個聲音都先用 iAI（沒寫 = 只有選「iAI 聲音」才用）
+      "iai": {"voice": "...", "extra": {"seed": 42}}   iAI 固定聲音用的參數（用 tools/iai_probe.py 找）
+    """
+    try:
+        m = os.path.getmtime(TTS_CONF)
+    except OSError:
+        _conf.update(mtime=None, order=["local"], iai={})
+        return _conf
+    if m != _conf["mtime"]:
+        try:
+            import json
+            with open(TTS_CONF, encoding="utf-8") as f:
+                d = json.load(f)
+            order = [x for x in d.get("order", []) if x in ("iai", "local")]
+            iai = d.get("iai") if isinstance(d.get("iai"), dict) else {}
+            _conf.update(mtime=m, order=order or ["local"], iai=iai)
+            logger.info(f"gftts 語音設定：順序 {_conf['order']}，iAI {iai}")
+        except Exception as e:
+            logger.warning(f"gftts 讀不懂 {TTS_CONF}：{e}")
+            _conf.update(mtime=m, order=["local"], iai={})
+    return _conf
+
+
+def _order() -> list:
+    return _load_conf()["order"]
+
+
+def iai_body(text: str, fmt: str = "wav") -> dict:
+    """送給 iAI /audio/speech 的內容；tts.json 的 iai.voice / iai.extra 會蓋上去，讓每句都是同一個聲音"""
+    c = _load_conf()["iai"]
+    body = {"model": IAI_TTS_MODEL, "input": text, "voice": str(c.get("voice") or IAI_TTS_VOICE), "response_format": fmt}
+    extra = c.get("extra")
+    if isinstance(extra, dict):
+        body.update({k: v for k, v in extra.items() if k not in ("model", "input")})
+    return body
+
+
+def _decode(data: bytes):
+    """wav 用 soundfile；mp3 等其他格式交給 PyAV（aiortc 自帶）"""
+    try:
+        stream, sr = sf.read(BytesIO(data), dtype="float32")
+        return (stream[:, 0] if stream.ndim > 1 else stream), sr
+    except Exception:
+        import av
+        chunks, sr = [], 24000
+        with av.open(BytesIO(data)) as c:
+            st = c.streams.audio[0]
+            sr = st.rate or 24000
+            rs = av.AudioResampler(format="flt", layout="mono", rate=sr)
+            for frame in c.decode(st):
+                for f in rs.resample(frame):
+                    chunks.append(f.to_ndarray().reshape(-1))
+            for f in rs.resample(None):
+                chunks.append(f.to_ndarray().reshape(-1))
+        return (np.concatenate(chunks) if chunks else np.zeros(0, np.float32)), sr
 
 
 @register("tts", "gftts")
 class GfTTS(BaseTTS):
+    def _fetch_iai(self, text: str) -> bytes | None:
+        key = os.getenv("IAI_API_KEY", "")
+        if not key:
+            logger.warning("iAI 語音：沒有 IAI_API_KEY，跳過")
+            return None
+        try:
+            r = requests.post(IAI_TTS_URL, timeout=IAI_TTS_TIMEOUT,
+                              headers={"x-litellm-api-key": f"Bearer {key}", "accept": "application/json"},
+                              json=iai_body(text))
+            r.raise_for_status()
+            if len(r.content) < 200:
+                raise ValueError(f"回傳太短：{r.content[:100]!r}")
+            return r.content
+        except Exception as e:
+            logger.warning(f"iAI 語音失敗，改用本機語音：{e}")
+            return None
+
     def _fetch(self, text: str, emotion: str) -> bytes | None:
+        order = _order()
+        if getattr(self.parent, "_gf_voice", "") == "iai":      # 開始畫面選了「iAI 聲音」
+            order = ["iai", "local"]
+        for eng in order:
+            if eng == "iai":
+                data = self._fetch_iai(text)
+                if data:
+                    return data
+            elif eng == "local":
+                data = self._fetch_local(text, emotion)
+                if data:
+                    return data
+        return None
+
+    def _fetch_local(self, text: str, emotion: str) -> bytes | None:
         voice = getattr(self.parent, "_gf_voice", "female")
+        if voice == "iai":
+            voice = "female"
         for tw in TW_TTS_URLS:
             try:
                 r = requests.post(tw, json={"input": text, "voice": voice, "emotion": emotion}, timeout=TIMEOUT)
@@ -67,9 +171,11 @@ class GfTTS(BaseTTS):
         if not wav:
             return
 
-        stream, sr = sf.read(BytesIO(wav), dtype="float32")
-        if stream.ndim > 1:
-            stream = stream[:, 0]
+        try:
+            stream, sr = _decode(wav)
+        except Exception as e:
+            logger.error(f"gftts 解不開語音：{e}")
+            return
         if sr != self.sample_rate and stream.shape[0] > 0:
             stream = resampy.resample(x=stream, sr_orig=sr, sr_new=self.sample_rate)
         stream = stream.astype(np.float32)

@@ -38,6 +38,17 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 USER_RE = re.compile(r"^u_[0-9a-f]{16}$")
 PREVIEW_TEXT = "嗨，我是你的學伴！今天也一起加油吧，有不懂的地方隨時問我喔。"
 RECORD_TEXT = "嗨，我是你的學伴。今天我們一起把作業寫完，有不懂的地方隨時問我，加油！"
+IAI_TTS_URL = os.getenv("IAI_TTS_URL", os.getenv("IAI_BASE_URL", "https://www.iai.nkust.edu.tw/aihub/v1").rstrip("/") + "/audio/speech")
+IAI_TTS_MODEL = os.getenv("IAI_TTS_MODEL", "Speaker")
+IAI_TTS_VOICE = os.getenv("IAI_TTS_VOICE", "default")
+
+
+def iai_on() -> bool:
+    """有 IAI_API_KEY（跟 LLM 同一把）就在開始畫面多一個「iAI 聲音」（雲端，學校 iAI 平台）"""
+    return bool(os.getenv("IAI_API_KEY")) and os.getenv("IAI_TTS_ENABLE", "1") == "1"
+
+
+IAI_ENTRY = {"id": "iai", "name": "iAI 聲音", "gender": "cloud", "mine": False, "order": 0}
 MAX_USER_VOICES = int(os.getenv("MAX_USER_VOICES", "200"))
 MAX_AUDIO = 8 * 1024 * 1024
 
@@ -93,16 +104,47 @@ async def _tts_alive() -> str | None:
 async def voices(request):
     mine = {x for x in request.query.get("mine", "").split(",") if USER_RE.match(x)}
     tw = await _tts_alive()
-    if not tw:
+    lst = _list(mine) if tw else []
+    if iai_on():
+        lst.append(dict(IAI_ENTRY))
+    if not lst:
         return web.json_response({"engine": "tts2", "voices": {}, "list": []})
-    lst = _list(mine)
     # 舊版網頁用的格式（voices: {id: [...]}）一起回傳
     return web.json_response({"engine": "breezy", "url": tw, "list": lst,
                               "voices": {v["id"]: ["neutral"] for v in lst}, "record_text": RECORD_TEXT})
 
 
+def _iai_body(text):
+    try:
+        from tts.gftts import iai_body       # 跟正式說話用同一組參數（data/tts.json 的 iai）
+        return iai_body(text, "wav")
+    except Exception:
+        return {"model": IAI_TTS_MODEL, "input": text, "voice": IAI_TTS_VOICE}
+
+
+async def _preview_iai():
+    body = _iai_body(PREVIEW_TEXT)
+    key = ("iai", json.dumps(body, sort_keys=True, ensure_ascii=False))
+    if key in _preview_cache:
+        return _preview_cache[key]
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
+        async with s.post(IAI_TTS_URL, headers={"x-litellm-api-key": f"Bearer {os.getenv('IAI_API_KEY', '')}"},
+                          json=body) as r:
+            if r.status != 200:
+                raise RuntimeError(f"iAI {r.status}")
+            data = (await r.read(), r.headers.get("Content-Type", "audio/wav").split(";")[0])
+    _preview_cache[key] = data
+    return data
+
+
 async def preview(request):
     vid = request.query.get("voice", "")
+    if vid == "iai" and iai_on():
+        try:
+            body, ctype = await _preview_iai()
+        except Exception as e:
+            return web.json_response({"ok": False, "error": f"iAI 語音沒回應：{e}"}, status=503)
+        return web.Response(body=body, content_type=ctype, headers={"Cache-Control": "no-store"})
     if not ID_RE.match(vid) or not os.path.isfile(os.path.join(VOICES_DIR, vid, "neutral.wav")):
         return web.json_response({"ok": False, "error": "沒有這個聲音"}, status=404)
     key = (vid, os.path.getmtime(os.path.join(VOICES_DIR, vid, "neutral.wav")))
@@ -251,6 +293,8 @@ async def delete(request):
 def valid_voice(v) -> str:
     """/offer 帶來的 voice：內建或自己錄的、而且存在才用，否則 female"""
     v = str(v or "")
+    if v == "iai" and iai_on():
+        return v
     if ID_RE.match(v) and os.path.isfile(os.path.join(VOICES_DIR, v, "neutral.wav")):
         return v
     return "female"
