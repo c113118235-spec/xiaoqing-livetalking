@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- 測試嵌入用：在自己電腦上 `python -m http.server 8000` 開這個檔案（網址 http://localhost:8000/embed_demo.html），
+     金鑰要用 --origin http://localhost:8000 建立；入場券在 DGX 上用 curl 換（見 docs/api_v1.md），貼到下面。 -->
+<html lang="zh-Hant"><head><meta charset="utf-8"><title>小晴嵌入測試</title>
+<style>body{font-family:system-ui,"Microsoft JhengHei";margin:24px}#xq{width:360px;height:480px;margin:12px 0;background:#111}
+input{width:420px;padding:6px}button{padding:6px 12px;margin:2px}</style></head><body>
+<h2>小晴嵌入測試</h2>
+<p>小晴網址 <input id="server" placeholder="https://xxxx.trycloudflare.com"></p>
+<p>入場券 <input id="token" placeholder="xq1...."> <button id="go">開始</button></p>
+<div id="xq"></div>
+<p><input id="text" value="哈囉，我是小晴！"> <button id="say">照念</button><button id="chat">讓她回答</button>
+<button id="stop">打斷</button><button id="end">結束</button></p>
+<pre id="log"></pre>
+<script>
+const $ = (id) => document.getElementById(id), log = (m) => $("log").textContent += m + "\n";
+let xq;
+$("go").onclick = () => {
+  const s = document.createElement("script");
+  s.src = $("server").value.replace(/\/$/, "") + "/xiaoqing-embed.js";
+  s.onload = () => {
+    xq = XiaoqingEmbed.mount("#xq", { server: $("server").value, token: $("token").value.trim() });
+    ["ready", "playing", "speaking", "needs-gesture", "ended", "error"].forEach((e) => xq.on(e, (v) => log(e + " " + JSON.stringify(v))));
+  };
+  document.head.appendChild(s);
+};
+$("say").onclick = () => xq.say($("text").value).catch((e) => log(e.message));
+$("chat").onclick = () => xq.chat($("text").value).catch((e) => log(e.message));
+$("stop").onclick = () => xq.interrupt();
+$("end").onclick = () => xq.end();
+</script></body></html>

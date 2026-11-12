@@ -48,7 +48,27 @@ def iai_on() -> bool:
     return bool(os.getenv("IAI_API_KEY")) and os.getenv("IAI_TTS_ENABLE", "1") == "1"
 
 
-IAI_ENTRY = {"id": "iai", "name": "iAI 聲音", "gender": "cloud", "mine": False, "order": 0}
+def _iai_names() -> list:
+    try:
+        from tts.gftts import iai_voices
+        return iai_voices()
+    except Exception:
+        return [v.strip() for v in os.getenv("IAI_TTS_VOICES", "9D,36D").split(",") if re.match(r"^[A-Za-z0-9-]{1,24}$", v.strip())]
+
+
+def _iai_entries() -> list:
+    return [{"id": f"iai_{n}", "name": f"iAI {n}", "gender": "cloud", "mine": False, "order": i}
+            for i, n in enumerate(_iai_names())]
+
+
+def _iai_voice_of(vid: str):
+    vid = str(vid or "")
+    names = _iai_names()
+    if vid == "iai":
+        return names[0] if names else None
+    if vid.startswith("iai_") and vid[4:] in names:
+        return vid[4:]
+    return None
 MAX_USER_VOICES = int(os.getenv("MAX_USER_VOICES", "200"))
 MAX_AUDIO = 8 * 1024 * 1024
 
@@ -106,7 +126,7 @@ async def voices(request):
     tw = await _tts_alive()
     lst = _list(mine) if tw else []
     if iai_on():
-        lst.append(dict(IAI_ENTRY))
+        lst += _iai_entries()
     if not lst:
         return web.json_response({"engine": "tts2", "voices": {}, "list": []})
     # 舊版網頁用的格式（voices: {id: [...]}）一起回傳
@@ -114,16 +134,16 @@ async def voices(request):
                               "voices": {v["id"]: ["neutral"] for v in lst}, "record_text": RECORD_TEXT})
 
 
-def _iai_body(text):
+def _iai_body(text, voice):
     try:
         from tts.gftts import iai_body       # 跟正式說話用同一組參數（data/tts.json 的 iai）
-        return iai_body(text, "wav")
+        return iai_body(text, "wav", voice=voice)
     except Exception:
-        return {"model": IAI_TTS_MODEL, "input": text, "voice": IAI_TTS_VOICE}
+        return {"model": IAI_TTS_MODEL, "input": text, "voice": voice}
 
 
-async def _preview_iai():
-    body = _iai_body(PREVIEW_TEXT)
+async def _preview_iai(voice):
+    body = _iai_body(PREVIEW_TEXT, voice)
     key = ("iai", json.dumps(body, sort_keys=True, ensure_ascii=False))
     if key in _preview_cache:
         return _preview_cache[key]
@@ -139,9 +159,10 @@ async def _preview_iai():
 
 async def preview(request):
     vid = request.query.get("voice", "")
-    if vid == "iai" and iai_on():
+    iai_voice = _iai_voice_of(vid) if iai_on() else None
+    if iai_voice:
         try:
-            body, ctype = await _preview_iai()
+            body, ctype = await _preview_iai(iai_voice)
         except Exception as e:
             return web.json_response({"ok": False, "error": f"iAI 語音沒回應：{e}"}, status=503)
         return web.Response(body=body, content_type=ctype, headers={"Cache-Control": "no-store"})
@@ -293,8 +314,8 @@ async def delete(request):
 def valid_voice(v) -> str:
     """/offer 帶來的 voice：內建或自己錄的、而且存在才用，否則 female"""
     v = str(v or "")
-    if v == "iai" and iai_on():
-        return v
+    if iai_on() and _iai_voice_of(v):
+        return v if v.startswith("iai_") else f"iai_{_iai_voice_of(v)}"
     if ID_RE.match(v) and os.path.isfile(os.path.join(VOICES_DIR, v, "neutral.wav")):
         return v
     return "female"

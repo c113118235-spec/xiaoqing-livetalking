@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>小晴</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0B0A10; overflow: hidden;
+               font-family: "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif; color: #fff; }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .4s; }
+  video.on { opacity: 1; }
+  #badge { position: absolute; top: 10px; left: 10px; padding: 3px 10px; border-radius: 12px; font-size: 12px;
+           background: rgba(0,0,0,.45); border: 1px solid rgba(255,255,255,.25); }
+  #msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
+         padding: 24px; font-size: 15px; color: rgba(255,255,255,.75); }
+  #tap { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); padding: 10px 18px; border: none;
+         border-radius: 20px; background: #E86AA6; color: #fff; font-size: 14px; font-weight: 700; cursor: pointer; }
+</style>
+</head>
+<body>
+<video id="video" autoplay playsinline muted></video>
+<audio id="audio" autoplay></audio>
+<div id="msg">小晴準備中…</div>
+<span id="badge">AI 角色</span>
+<button id="tap" hidden>▶ 點一下聽小晴說話</button>
+<script>
+(() => {
+  "use strict";
+  // 網址：/embed#token=<入場券>&origin=<放 iframe 的網頁網域>   （用 # 才不會出現在伺服器記錄裡）
+  const q = new URLSearchParams(location.hash.slice(1));
+  history.replaceState(null, "", location.pathname);           // 入場券只用一次，從網址列拿掉
+  const ENTRY = q.get("token") || "";
+  const WANT_ORIGIN = (q.get("origin") || "").replace(/\/$/, "");
+  const $ = (id) => document.getElementById(id);
+  let sid = "", stoken = "", parentOrigin = "", speaking = false, pc = null, timer = 0;
+
+  const IN_FRAME = window.parent !== window;
+  function emit(type, data) {
+    const msg = { xq: type, ...(data || {}) };
+    if (IN_FRAME) { if (parentOrigin) window.parent.postMessage(msg, parentOrigin); return; }
+    // App 的 WebView：Android addJavascriptInterface(…, "XiaoqingNative")、iOS WKScriptMessageHandler "xiaoqing"
+    try { if (window.XiaoqingNative && window.XiaoqingNative.onEvent) window.XiaoqingNative.onEvent(JSON.stringify(msg)); } catch (e) {}
+    try { if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.xiaoqing) window.webkit.messageHandlers.xiaoqing.postMessage(msg); } catch (e) {}
+    try { if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(msg)); } catch (e) {}
+    try { if (window.flutter_inappwebview) window.flutter_inappwebview.callHandler("xiaoqing", msg); } catch (e) {}
+    try { if (window.XiaoqingChannel) window.XiaoqingChannel.postMessage(JSON.stringify(msg)); } catch (e) {}   // Flutter webview_flutter
+  }
+  function fail(text) { $("msg").textContent = text; $("msg").hidden = false; emit("error", { message: text }); }
+
+  async function api(method, path, body) {
+    const r = await fetch("api/v1/" + path, {
+      method, headers: { "Content-Type": "application/json", Authorization: "Bearer " + stoken },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || ("HTTP " + r.status));
+    return d;
+  }
+
+  function playAudio() {
+    const p = $("audio").play();
+    if (p && p.catch) p.catch(() => { $("tap").hidden = false; emit("needs-gesture"); });
+  }
+  $("tap").onclick = () => { $("tap").hidden = true; $("audio").muted = false; playAudio(); };
+
+  async function start() {
+    if (!ENTRY) return fail("缺少入場券");
+    let iceServers = [{ urls: ["stun:stun.l.google.com:19302"] }];
+    try {
+      const r = await fetch("api/v1/ice", { headers: { Authorization: "Bearer " + ENTRY } });
+      if (r.ok) iceServers = (await r.json()).iceServers || iceServers;
+    } catch (e) {}
+    pc = new RTCPeerConnection({ iceServers });
+    pc.addEventListener("track", (e) => {
+      if (e.track.kind === "video") {
+        $("video").srcObject = e.streams[0];
+        $("video").onplaying = () => { $("video").classList.add("on"); $("msg").hidden = true; emit("playing"); };
+      } else {
+        $("audio").srcObject = e.streams[0];
+        playAudio();
+      }
+    });
+    pc.addEventListener("connectionstatechange", () => {
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") { clearInterval(timer); fail("連線結束了"); emit("ended"); }
+    });
+    pc.addTransceiver("video", { direction: "recvonly" });
+    pc.addTransceiver("audio", { direction: "recvonly" });
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise((res) => {
+      if (pc.iceGatheringState === "complete") return res();
+      pc.addEventListener("icegatheringstatechange", () => pc.iceGatheringState === "complete" && res());
+      setTimeout(res, 5000);
+    });
+    const r = await fetch("api/v1/sessions", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ENTRY },
+      body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) return fail(d.error || "小晴連不上");
+    sid = d.session_id; stoken = d.session_token;
+    const allowed = (d.origins || []).map((o) => o.replace(/\/$/, ""));
+    if (WANT_ORIGIN && allowed.includes(WANT_ORIGIN)) parentOrigin = WANT_ORIGIN;     // 只跟被允許的網頁對話
+    await pc.setRemoteDescription({ sdp: d.sdp, type: d.type });
+    emit("ready", { session_id: sid, expires_at: d.expires_at, chat: d.chat });
+    timer = setInterval(async () => {
+      try {
+        const s = await api("GET", "sessions/" + sid);
+        if (s.speaking !== speaking) { speaking = s.speaking; emit("speaking", { value: speaking }); }
+        if (!s.alive) { clearInterval(timer); emit("ended"); }
+      } catch (e) {}
+    }, 700);
+  }
+
+  async function handle(m) {
+    m = m || {};
+    try {
+      if (m.xq === "say") await api("POST", `sessions/${sid}/say`, {
+        text: String(m.text || ""), mode: m.mode || "echo", interrupt: !!m.interrupt,
+        emotion: m.emotion || undefined, action: m.action || undefined, segments: m.segments || undefined });
+      else if (m.xq === "interrupt") await api("POST", `sessions/${sid}/interrupt`);
+      else if (m.xq === "end") { await api("DELETE", "sessions/" + sid); pc && pc.close(); }
+      else return;
+      emit("ack", { id: m.id });
+    } catch (err) { emit("error", { id: m.id, message: err.message }); }
+  }
+  // iframe：外層網頁用 postMessage 送 {xq:"say", text, mode:"echo"|"chat", interrupt} / {xq:"interrupt"} / {xq:"end"}
+  window.addEventListener("message", (e) => {
+    if (!IN_FRAME || !parentOrigin || e.origin !== parentOrigin || e.source !== window.parent) return;
+    handle(e.data);
+  });
+  // App 的 WebView：原生程式用 evaluateJavascript 呼叫 xiaoqing.say("…") / xiaoqing.chat("…") / xiaoqing.interrupt() / xiaoqing.end()
+  if (!IN_FRAME) {
+    window.xiaoqing = {
+      // xiaoqing.say("你好", {emotion: "happy", action: "wave"}) 或 xiaoqing.say({segments: [...]})
+      say: (text, o) => handle(typeof text === "object" ? { xq: "say", mode: "echo", ...text }
+                                : { xq: "say", text, mode: "echo", ...(typeof o === "object" ? o : { interrupt: !!o }) }),
+      chat: (text, interrupt) => handle({ xq: "say", text, mode: "chat", interrupt }),
+      interrupt: () => handle({ xq: "interrupt" }),
+      end: () => handle({ xq: "end" }),
+    };
+  }
+  window.addEventListener("pagehide", () => { if (sid) fetch("api/v1/sessions/" + sid, { method: "DELETE", keepalive: true, headers: { Authorization: "Bearer " + stoken } }); });
+
+  start().catch((e) => fail("小晴連不上：" + e.message));
+})();
+</script>
+</body>
+</html>

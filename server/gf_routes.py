@@ -246,6 +246,8 @@ async def gate_middleware(request, handler):
     path = request.path
     if path == "/gate":
         return await handler(request)
+    if path.startswith("/api/v1/") or path in ("/embed", "/xiaoqing-embed.js"):
+        return await handler(request)          # 外部串接：gf_api.py 自己用金鑰／入場券檢查
     if not ACCESS_CODE:
         return web.Response(text="公開網址尚未設定通關碼", status=403)
     if not hmac.compare_digest(request.cookies.get(COOKIE, ""), COOKIE_VALUE):
@@ -374,6 +376,8 @@ def setup_gf_routes(app):
     gf_voice.setup(app)                      # 聲音清單、試聽、自己的聲音：/tts/*、/voice/*
     from server import gf_elearn
     gf_elearn.setup(app)                     # 黑板：登入教學平台同步作業、考試：/el/sync
+    from server import gf_api
+    gf_api.setup(app)                        # 外部網站嵌入小晴：/api/v1/*、/embed
     try:
         from server import gf_pose
         gf_pose.patch_livetalking()

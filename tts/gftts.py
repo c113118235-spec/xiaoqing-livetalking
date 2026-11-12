@@ -4,7 +4,7 @@
   兩個都用開始畫面選的聲音（female / male）＋情緒
 - 都失敗 → tts2（CosyVoice3，8005）→ 再失敗 → tts（Breeze2-VITS，8002）
 - 學校 iAI 平台的語音（/aihub/v1/audio/speech，模型 Speaker）可以排在最前面試用：
-  開始畫面選「iAI 聲音」就用它（失敗回到本機語音）；
+  開始畫面選「iAI 9D」「iAI 36D」就用那個固定的說話者（失敗回到本機語音）；
   或 data/tts.json 寫 {"order": ["iai", "local"]}，不管選哪個聲音都先用 iAI，失敗才回到上面的本機語音；
   不用重開，每句都會讀這個檔（改了馬上生效）。iAI 目前只有一個聲音、不吃情緒參數。
   金鑰用跟 LLM 一樣的 IAI_API_KEY；IAI_TTS_MODEL（預設 Speaker）、IAI_TTS_VOICE（預設 default）
@@ -36,6 +36,8 @@ TIMEOUT = float(os.getenv("TTS2_TIMEOUT", "15"))
 IAI_TTS_URL = os.getenv("IAI_TTS_URL", os.getenv("IAI_BASE_URL", "https://www.iai.nkust.edu.tw/aihub/v1").rstrip("/") + "/audio/speech")
 IAI_TTS_MODEL = os.getenv("IAI_TTS_MODEL", "Speaker")
 IAI_TTS_VOICE = os.getenv("IAI_TTS_VOICE", "default")
+IAI_TTS_VOICES = os.getenv("IAI_TTS_VOICES", "9D,36D")          # 開始畫面列出的 iAI 聲音（固定的說話者）
+IAI_NAME_RE = __import__("re").compile(r"^[A-Za-z0-9-]{1,24}$")
 IAI_TTS_TIMEOUT = float(os.getenv("IAI_TTS_TIMEOUT", "20"))
 TTS_CONF = os.getenv("TTS_CONF", os.path.join("data", "tts.json"))
 _conf = {"mtime": None, "order": ["local"], "iai": {}}
@@ -44,7 +46,7 @@ _conf = {"mtime": None, "order": ["local"], "iai": {}}
 def _load_conf():
     """data/tts.json（改了馬上生效）：
       "order": ["iai", "local"]   不管選哪個聲音都先用 iAI（沒寫 = 只有選「iAI 聲音」才用）
-      "iai": {"voice": "...", "extra": {"seed": 42}}   iAI 固定聲音用的參數（用 tools/iai_probe.py 找）
+      "iai": {"voices": ["9D", "36D"], "extra": {...}}   開始畫面列出哪些 iAI 聲音（預設 9D、36D）、額外參數
     """
     try:
         m = os.path.getmtime(TTS_CONF)
@@ -70,10 +72,37 @@ def _order() -> list:
     return _load_conf()["order"]
 
 
-def iai_body(text: str, fmt: str = "wav") -> dict:
-    """送給 iAI /audio/speech 的內容；tts.json 的 iai.voice / iai.extra 會蓋上去，讓每句都是同一個聲音"""
+def iai_voices() -> list:
+    """iAI 的固定聲音清單：data/tts.json 的 iai.voices，沒寫就用 IAI_TTS_VOICES（預設 9D、36D）"""
     c = _load_conf()["iai"]
-    body = {"model": IAI_TTS_MODEL, "input": text, "voice": str(c.get("voice") or IAI_TTS_VOICE), "response_format": fmt}
+    raw = c.get("voices")
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    if not isinstance(raw, list) or not raw:
+        raw = IAI_TTS_VOICES.split(",")
+    out = []
+    for v in raw:
+        v = str(v).strip()
+        if IAI_NAME_RE.match(v) and v not in out:
+            out.append(v)
+    return out or ["default"]
+
+
+def iai_voice_of(choice: str) -> str | None:
+    """開始畫面的選擇 → iAI 的 voice：iai_9D → 9D；舊的 iai → 清單第一個；不是 iAI → None"""
+    choice = str(choice or "")
+    if choice == "iai":
+        return iai_voices()[0]
+    if choice.startswith("iai_") and choice[4:] in iai_voices():
+        return choice[4:]
+    return None
+
+
+def iai_body(text: str, fmt: str = "wav", voice: str | None = None) -> dict:
+    """送給 iAI /audio/speech 的內容；voice 用開始畫面選的那個（固定說話者），tts.json 的 iai.extra 會加上去"""
+    c = _load_conf()["iai"]
+    voice = voice or str(c.get("voice") or "") or iai_voices()[0]
+    body = {"model": IAI_TTS_MODEL, "input": text, "voice": voice, "response_format": fmt}
     extra = c.get("extra")
     if isinstance(extra, dict):
         body.update({k: v for k, v in extra.items() if k not in ("model", "input")})
@@ -102,7 +131,7 @@ def _decode(data: bytes):
 
 @register("tts", "gftts")
 class GfTTS(BaseTTS):
-    def _fetch_iai(self, text: str) -> bytes | None:
+    def _fetch_iai(self, text: str, voice: str | None = None) -> bytes | None:
         key = os.getenv("IAI_API_KEY", "")
         if not key:
             logger.warning("iAI 語音：沒有 IAI_API_KEY，跳過")
@@ -110,7 +139,7 @@ class GfTTS(BaseTTS):
         try:
             r = requests.post(IAI_TTS_URL, timeout=IAI_TTS_TIMEOUT,
                               headers={"x-litellm-api-key": f"Bearer {key}", "accept": "application/json"},
-                              json=iai_body(text))
+                              json=iai_body(text, voice=voice))
             r.raise_for_status()
             if len(r.content) < 200:
                 raise ValueError(f"回傳太短：{r.content[:100]!r}")
@@ -121,11 +150,12 @@ class GfTTS(BaseTTS):
 
     def _fetch(self, text: str, emotion: str) -> bytes | None:
         order = _order()
-        if getattr(self.parent, "_gf_voice", "") == "iai":      # 開始畫面選了「iAI 聲音」
+        iai_voice = iai_voice_of(getattr(self.parent, "_gf_voice", ""))
+        if iai_voice:                                            # 開始畫面選了 iAI 的某個聲音
             order = ["iai", "local"]
         for eng in order:
             if eng == "iai":
-                data = self._fetch_iai(text)
+                data = self._fetch_iai(text, iai_voice)
                 if data:
                     return data
             elif eng == "local":
@@ -136,7 +166,7 @@ class GfTTS(BaseTTS):
 
     def _fetch_local(self, text: str, emotion: str) -> bytes | None:
         voice = getattr(self.parent, "_gf_voice", "female")
-        if voice == "iai":
+        if str(voice).startswith("iai"):
             voice = "female"
         for tw in TW_TTS_URLS:
             try:
