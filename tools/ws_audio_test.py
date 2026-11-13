@@ -41,6 +41,66 @@ def load_pcm16k(path):
     return (np.clip(a, -1, 1) * 32767).astype("<i2").tobytes()
 
 
+class Recorder:
+    """把收到的影音照「原本的解析度」錄成 mp4（aiortc 內建的 MediaRecorder 會固定 640x480，畫面被裁掉）"""
+
+    def __init__(self, path):
+        import av
+        self.av, self.path = av, path
+        self.tracks, self.tasks = [], []
+        self.c = self.vs = self.as_ = None
+        self.pending = []
+
+    def add(self, track):
+        self.tracks.append(track)
+
+    async def start(self):
+        self.tasks = [asyncio.ensure_future(self._run(t)) for t in self.tracks]
+
+    def _open(self, vframe):
+        av = self.av
+        self.c = av.open(self.path, "w")
+        self.vs = self.c.add_stream("libx264", rate=25)
+        self.vs.width, self.vs.height, self.vs.pix_fmt = vframe.width // 2 * 2, vframe.height // 2 * 2, "yuv420p"
+        self.as_ = self.c.add_stream("aac", rate=48000) if any(t.kind == "audio" for t in self.tracks) else None
+
+    def _write(self, frame, kind):
+        st = self.vs if kind == "video" else self.as_
+        if st is None:
+            return
+        for pkt in st.encode(frame):
+            self.c.mux(pkt)
+
+    async def _run(self, track):
+        while True:
+            try:
+                f = await track.recv()
+            except Exception:
+                return
+            if self.c is None:
+                if track.kind == "video":
+                    self._open(f)
+                    self._write(f, "video")
+                    for k, pf in self.pending:
+                        self._write(pf, k)
+                    self.pending = []
+                else:
+                    self.pending.append(("audio", f))
+                continue
+            self._write(f, track.kind)
+
+    async def stop(self):
+        for t in self.tasks:
+            t.cancel()
+        await asyncio.sleep(0.1)
+        if self.c is not None:
+            for st in (self.vs, self.as_):
+                if st is not None:
+                    for pkt in st.encode(None):
+                        self.c.mux(pkt)
+            self.c.close()
+
+
 async def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://127.0.0.1:8010", help="小晴伺服器（容器裡用 127.0.0.1）")
@@ -58,7 +118,6 @@ async def main():
     print(f"語音 {secs:.1f} 秒")
 
     from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
-    from aiortc.contrib.media import MediaRecorder
 
     async with aiohttp.ClientSession() as http:
         H = {"Authorization": "Bearer " + key}
@@ -72,8 +131,8 @@ async def main():
         ice = [RTCIceServer(**{k: v for k, v in s.items() if k in ("urls", "username", "credential")})
                for s in (await r.json()).get("iceServers", [])[:2]] if r.status == 200 else []
         pc = RTCPeerConnection(RTCConfiguration(iceServers=ice))
-        rec = MediaRecorder(a.out)
-        pc.on("track", lambda t: rec.addTrack(t))
+        rec = Recorder(a.out)
+        pc.on("track", rec.add)
         pc.addTransceiver("video", direction="recvonly")
         pc.addTransceiver("audio", direction="recvonly")
         await pc.setLocalDescription(await pc.createOffer())       # aiortc 會等 ICE 收集完
