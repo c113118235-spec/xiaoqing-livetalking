@@ -47,7 +47,44 @@ def get_smoothened_boxes(boxes, T):
 		boxes[i] = np.mean(window, axis=0)
 	return boxes
 
-def generate_avatar(video_path, avatar_id, save_path='./data/avatars', img_size=96, pads=[0, 10, 0, 0], nosmooth=False, face_det_batch_size=16, progress_callback=None):
+def stabilize_boxes(rects, shape, window=9):
+    """（小晴自訂學伴用）讓臉框不抖：
+    - 找不到臉的格子：用前後格內插，不再用整張圖（以前會突然「跳」一下）
+    - 框的大小固定成所有格子的中位數：嘴型貼上去時不會忽大忽小
+    - 中心點用置中的移動平均（頭尾用鏡射補，因為待機影片是來回播放）
+    rects：每格 [x1, y1, x2, y2] 或 None；回傳 int 陣列 (N, 4)"""
+    H, W = shape[:2]
+    n = len(rects)
+    ok = [i for i, r in enumerate(rects) if r is not None]
+    if not ok:
+        return np.array([[0, 0, W, H]] * n)
+    arr = np.array([rects[i] if rects[i] is not None else [np.nan] * 4 for i in range(n)], dtype=np.float64)
+    for c in range(4):                                    # 內插缺的格子
+        col = arr[:, c]
+        bad = np.isnan(col)
+        if bad.any():
+            col[bad] = np.interp(np.flatnonzero(bad), np.flatnonzero(~bad), col[~bad])
+    cx, cy = (arr[:, 0] + arr[:, 2]) / 2, (arr[:, 1] + arr[:, 3]) / 2
+    bw, bh = np.median(arr[:, 2] - arr[:, 0]), np.median(arr[:, 3] - arr[:, 1])
+    k = max(1, min(window, n) // 2 * 2 + 1)
+
+    def smooth(v):
+        if k <= 1 or n < 3:
+            return v
+        pad = k // 2
+        vv = np.concatenate([v[pad:0:-1], v, v[-2:-pad - 2:-1]]) if n > pad + 1 else v
+        if len(vv) == len(v):
+            return v
+        return np.convolve(vv, np.ones(k) / k, mode="valid")
+
+    cx, cy = smooth(cx), smooth(cy)
+    bw, bh = int(round(min(bw, W))), int(round(min(bh, H)))
+    x1 = np.clip(np.round(cx - bw / 2), 0, W - bw).astype(int)
+    y1 = np.clip(np.round(cy - bh / 2), 0, H - bh).astype(int)
+    return np.stack([x1, y1, x1 + bw, y1 + bh], axis=1)
+
+
+def generate_avatar(video_path, avatar_id, save_path='./data/avatars', img_size=96, pads=[0, 10, 0, 0], nosmooth=False, face_det_batch_size=16, progress_callback=None, stable=False):
     """
     生成avatar的核心逻辑
 
@@ -105,6 +142,19 @@ def generate_avatar(video_path, avatar_id, save_path='./data/avatars', img_size=
 
     results = []
     pady1, pady2, padx1, padx2 = pads
+    if stable:                                             # 小晴自訂學伴：固定大小、平滑、缺格內插
+        padded = []
+        for rect, image in zip(predictions, frames):
+            if rect is None:
+                padded.append(None)
+                continue
+            padded.append([max(0, rect[0] - padx1), max(0, rect[1] - pady1),
+                           min(image.shape[1], rect[2] + padx2), min(image.shape[0], rect[3] + pady2)])
+        boxes = stabilize_boxes(padded, frames[0].shape)
+        missing = sum(r is None for r in padded)
+        print(f"臉框：固定大小 {boxes[0][2] - boxes[0][0]}x{boxes[0][3] - boxes[0][1]}，{missing} 格沒找到臉已內插")
+        predictions = []                                   # 下面的舊流程跳過
+        nosmooth = True
     for rect, image in zip(predictions, frames):
         if rect is None:
             rect = [0, 0, image.shape[1], image.shape[0]]
@@ -115,7 +165,8 @@ def generate_avatar(video_path, avatar_id, save_path='./data/avatars', img_size=
         x2 = min(image.shape[1], rect[2] + padx2)
         results.append([x1, y1, x2, y2])
 
-    boxes = np.array(results)
+    if not stable:
+        boxes = np.array(results)
     if not nosmooth:
         boxes = get_smoothened_boxes(boxes, T=5)
 

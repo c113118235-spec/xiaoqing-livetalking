@@ -62,6 +62,7 @@ MAX_NAME = 12
 FPS = 25
 CUSTOM_SEG = os.getenv("CUSTOM_SEG", "auto").strip().lower()   # auto(=rembg) | rembg | key（單色背景，實驗用）| off
 CUSTOM_WATERMARK = os.getenv("CUSTOM_WATERMARK", "0") == "1"   # 畫面上印字；網頁標題已經有「AI 生成」標籤，預設不印
+CUSTOM_STABLE_BOX = os.getenv("CUSTOM_STABLE_BOX", "1") == "1"   # 臉框固定大小＋平滑（自訂學伴比較不抖）
 CUSTOM_SR = os.getenv("CUSTOM_SR", "1") == "1"        # 小照片先用 Real-ESRGAN 放大變清楚
 CUSTOM_SR_URL = os.getenv("CUSTOM_SR_URL",
                           "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth")
@@ -584,7 +585,8 @@ def _build(avatar_id) -> None:
         _set(avatar_id, status="building", progress=40, mode=mode)
         from avatars.wav2lip.genavatar import generate_avatar
         generate_avatar(video_path=video, avatar_id=avatar_id, save_path=AVATAR_DIR, img_size=IMG_SIZE,
-                        progress_callback=lambda p: _set(avatar_id, progress=40 + int(p * 0.55)))
+                        progress_callback=lambda p: _set(avatar_id, progress=40 + int(p * 0.55)),
+                        stable=CUSTOM_STABLE_BOX)
         _check_face(avatar_id)
         if CUSTOM_WATERMARK:
             _watermark(avatar_id)

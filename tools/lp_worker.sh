@@ -11,6 +11,8 @@ ROOT="${LIVETALKING_DIR:-$HOME/livetalking}"
 MODELS="${LP_MODELS:-$HOME/xiaozhi-speech/models}"
 IMAGE="${LP_IMAGE:-xiaozhi-liveportrait}"
 SECONDS_LOOP="${LP_SECONDS:-8}"
+LP_ARGS="${LP_ARGS:-}"                                  # 例如 "--yaw 2 --close-lips 1"
+GF_LP="$ROOT/tools/liveportrait"                        # repo 裡的小晴版 idle_gen.py（有就優先用）
 CUSTOM="$ROOT/data/custom"
 mkdir -p "$CUSTOM"
 echo "$(date '+%F %T') 小幫手啟動：$CUSTOM，映像 $IMAGE，模型 $MODELS"
@@ -23,9 +25,11 @@ while true; do
     case "$id" in custom_[0-9a-f]*) ;; *) continue ;; esac
     mv "$req" "$dir/lp_running" 2>/dev/null || continue
     echo "$(date '+%F %T') 開始 $id"
+    script=/app/idle_gen.py; extra=()
+    if [ -f "$GF_LP/idle_gen.py" ]; then script=/gf/idle_gen.py; extra=(-v "$GF_LP:/gf:ro"); fi
     if docker run --rm --gpus all --ipc=host \
-         -v "$MODELS:/models" -v "$dir:/char" \
-         "$IMAGE" /app/idle_gen.py /char/canvas.jpg /char/idle_lp.mp4 --seconds "$SECONDS_LOOP" \
+         -v "$MODELS:/models" -v "$dir:/char" "${extra[@]}" \
+         "$IMAGE" "$script" /char/canvas.jpg /char/idle_lp.mp4 --seconds "$SECONDS_LOOP" $LP_ARGS \
          > "$dir/lp.log" 2>&1 & 
        pid=$!
        while kill -0 "$pid" 2>/dev/null; do touch "$CUSTOM/.lp_worker"; sleep 5; done
