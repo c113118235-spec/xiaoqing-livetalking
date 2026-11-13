@@ -175,12 +175,18 @@ def _patch_bitrate():
       GF_VIDEO_MIN_KBPS  最低碼率，預設 2000（網路差時不會掉到比這更低）
       GF_VIDEO_MAX_KBPS  最高碼率，預設 8000
     設 GF_VIDEO_KBPS=0 則維持 aiortc 原本的設定（方便比較）。"""
-    start = int(os.getenv("GF_VIDEO_KBPS", "4000"))
+    conf = {}
+    try:                                      # data/av.json 可以覆寫（改完 docker restart xiaoqing，不用重建容器）
+        with open(AV_CONF, encoding="utf-8") as f:
+            conf = json.load(f)
+    except Exception:
+        pass
+    start = int(conf.get("video_kbps", os.getenv("GF_VIDEO_KBPS", "4000")))
     if start <= 0:
         logger.info("[gf-video] 使用 aiortc 預設碼率")
         return
-    lo = int(os.getenv("GF_VIDEO_MIN_KBPS", "2000"))
-    hi = int(os.getenv("GF_VIDEO_MAX_KBPS", "8000"))
+    lo = int(conf.get("video_min_kbps", os.getenv("GF_VIDEO_MIN_KBPS", "2000")))
+    hi = int(conf.get("video_max_kbps", os.getenv("GF_VIDEO_MAX_KBPS", "8000")))
     from aiortc.codecs import h264, vpx
     for m in (h264, vpx):
         m.DEFAULT_BITRATE, m.MIN_BITRATE, m.MAX_BITRATE = start * 1000, lo * 1000, hi * 1000
