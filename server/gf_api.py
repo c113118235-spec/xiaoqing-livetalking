@@ -543,6 +543,8 @@ CHUNK = 320                                                # 20 ms
 MAX_AUDIO_SEC = float(os.getenv("GF_API_MAX_AUDIO_SEC", "60"))       # 一段最長幾秒
 MAX_QUEUE_SEC = float(os.getenv("GF_API_MAX_QUEUE_SEC", "90"))       # 排隊還沒播的最多幾秒
 MAX_AUDIO_BYTES = int(os.getenv("GF_API_MAX_AUDIO_BYTES", str(10 * 1024 * 1024)))
+# 串流時先存這麼多才開始送進對嘴流程：網路一抖、某一片晚到，排隊裡還有存貨，就不會插進靜音造成「卡一下」
+PREBUFFER_SEC = float(os.getenv("GF_API_PREBUFFER_MS", "300")) / 1000
 
 
 def _queued_sec(s) -> float:
@@ -582,6 +584,8 @@ class _Feeder:
     def push(self, a, last=False):
         np = self.np
         self.buf = np.concatenate([self.buf, a]) if len(a) else self.buf
+        if self.first and not last and len(self.buf) < PREBUFFER_SEC * AUDIO_SR:
+            return                                       # 還在預先緩衝
         if last and len(self.buf) % CHUNK:
             self.buf = np.concatenate([self.buf, np.zeros(CHUNK - len(self.buf) % CHUNK, np.float32)])
         n = len(self.buf) // CHUNK

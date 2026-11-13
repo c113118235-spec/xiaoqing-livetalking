@@ -15,6 +15,7 @@
 import asyncio
 import hashlib
 import hmac
+import json
 import html
 import os
 import re
@@ -184,6 +185,42 @@ def _patch_bitrate():
     for m in (h264, vpx):
         m.DEFAULT_BITRATE, m.MIN_BITRATE, m.MAX_BITRATE = start * 1000, lo * 1000, hi * 1000
     logger.info(f"[gf-video] 影像碼率：起始 {start} kbps，範圍 {lo}–{hi} kbps")
+
+
+AV_CONF = os.path.join("data", "av.json")
+
+
+def _audio_delay_ms() -> int:
+    """聲音比嘴型早一點時，把聲音往後延。data/av.json 寫 {"audio_delay_ms": 120}，下一條新連線就生效（不用重開）；
+    沒有這個檔就用環境變數 GF_AUDIO_DELAY_MS（預設 0）"""
+    try:
+        with open(AV_CONF, encoding="utf-8") as f:
+            return max(0, min(1000, int(json.load(f).get("audio_delay_ms", 0))))
+    except FileNotFoundError:
+        return max(0, min(1000, int(os.getenv("GF_AUDIO_DELAY_MS", "0"))))
+    except Exception as e:
+        logger.warning(f"[gf-av] 讀不懂 {AV_CONF}：{e}")
+        return 0
+
+
+def _patch_av_sync():
+    """每條 WebRTC 連線開始時，在聲音前面先塞幾片 20 ms 的靜音：之後所有聲音都晚這麼多才播，嘴型就對上了"""
+    import numpy as np
+    from server import webrtc
+    if getattr(webrtc.HumanPlayer, "_gf_av_patched", False):
+        return
+    orig = webrtc.HumanPlayer.__init__
+
+    def init(self, *a, **k):
+        orig(self, *a, **k)
+        ms = _audio_delay_ms()
+        if ms >= 20:
+            for _ in range(ms // 20):
+                self.push_audio(np.zeros(320, np.int16))
+            logger.info(f"[gf-av] 聲音延後 {ms // 20 * 20} ms")
+
+    webrtc.HumanPlayer.__init__ = init
+    webrtc.HumanPlayer._gf_av_patched = True
 
 
 async def _refresh_turn_loop(app):
@@ -390,6 +427,7 @@ def setup_gf_routes(app):
     app.on_startup.append(_refresh_turn_loop)
     _patch_server_turn()
     _patch_bitrate()
+    _patch_av_sync()
     from server import gf_paste
     gf_paste.patch()
     logger.info(f"[gf-asr] /asr → {ASR_URL}")
