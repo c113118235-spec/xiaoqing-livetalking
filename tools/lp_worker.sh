@@ -26,10 +26,13 @@ while true; do
     mv "$req" "$dir/lp_running" 2>/dev/null || continue
     echo "$(date '+%F %T') 開始 $id"
     script=/app/idle_gen.py; extra=()
+    req_args=""
+    argf="$dir/lp_args"; [ -f "$argf" ] || argf="$CUSTOM/lp_args"      # 這一張的參數；沒有就用全部共用的 data/custom/lp_args
+    [ -f "$argf" ] && req_args="$(tr -cd 'a-z0-9 ._=-' < "$argf")"     # 例如：--preset natural --seconds 12
     if [ -f "$GF_LP/idle_gen.py" ]; then script=/gf/idle_gen.py; extra=(-v "$GF_LP:/gf:ro"); fi
     if docker run --rm --gpus all --ipc=host \
          -v "$MODELS:/models" -v "$dir:/char" "${extra[@]}" \
-         "$IMAGE" "$script" /char/canvas.jpg /char/idle_lp.mp4 --seconds "$SECONDS_LOOP" $LP_ARGS \
+         "$IMAGE" "$script" /char/canvas.jpg /char/idle_lp.mp4 --seconds "$SECONDS_LOOP" $LP_ARGS $req_args \
          > "$dir/lp.log" 2>&1 & 
        pid=$!
        while kill -0 "$pid" 2>/dev/null; do touch "$CUSTOM/.lp_worker"; sleep 5; done
