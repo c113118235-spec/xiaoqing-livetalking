@@ -370,7 +370,7 @@ header h1, header .ai-tag, header .icon-btn, .persona-switch button { white-spac
 <body>
 <div class="stage">
   <div class="loading" id="loading">連線中…</div>
-  <video id="video" autoplay playsinline></video>
+  <video id="video" autoplay playsinline muted></video>
   <audio id="audio" autoplay></audio>
 </div>
 
@@ -603,10 +603,61 @@ async function connect() {
                            voice: window.XQ_VOICE || undefined }),                         // 女聲／男聲
   });
   const answer = await r.json();
+  if (!answer.sdp) {                                   // 例如人數已滿：{code:-1, msg:"Maximum session limit reached"}
+    const full = /maximum session/i.test(answer.msg || "");
+    $("loading").textContent = full ? "目前使用的人數已滿，請過一兩分鐘再重新整理" : ("連不上小晴：" + (answer.msg || "伺服器沒有回應"));
+    setStatus($("loading").textContent);
+    return;
+  }
   sessionid = answer.sessionid;
   await pc.setRemoteDescription(answer);
   listen();
   initActions();
+  watchVideo();
+}
+
+// ---------- 連上了卻沒畫面：10 秒內沒開始播，就顯示原因並提供「點一下播放」 ----------
+async function rtcDiag() {
+  const out = { state: pc.connectionState, ice: pc.iceConnectionState, kb: 0, frames: 0, route: "?" };
+  try {
+    const rep = await pc.getStats();
+    let pair = null;
+    rep.forEach((s) => {
+      if (s.type === "inbound-rtp" && s.kind === "video") { out.kb = Math.round((s.bytesReceived || 0) / 1024); out.frames = s.framesDecoded || 0; }
+      if (s.type === "candidate-pair" && (s.selected || s.nominated) && s.state === "succeeded") pair = s;
+    });
+    if (pair) {
+      const l = rep.get(pair.localCandidateId), rm = rep.get(pair.remoteCandidateId);
+      out.route = `${l ? l.candidateType + "/" + (l.protocol || "") : "?"} → ${rm ? rm.candidateType : "?"}`;
+    }
+  } catch (e) {}
+  return out;
+}
+
+function watchVideo() {
+  setTimeout(async () => {
+    if ($("video").classList.contains("on")) return;
+    const d = await rtcDiag();
+    console.warn("[xq] 沒有畫面", d);
+    const why = d.state !== "connected" ? `影像連線沒打通（${d.state}）：學校或公司網路可能擋了，需要 TURN 中繼`
+      : d.frames > 0 ? "影像有收到，但瀏覽器沒有播放" : d.kb > 0 ? "有收到資料但解不出畫面" : "已連線但沒收到影像資料";
+    const box = $("loading");
+    if (!box) return;
+    box.innerHTML = "";
+    box.style.flexDirection = "column";
+    box.style.textAlign = "center";
+    box.style.padding = "24px";
+    const msg = document.createElement("div");
+    msg.textContent = why;
+    const info = document.createElement("small");
+    info.style.cssText = "display:block;opacity:.6;margin:6px 0 12px";
+    info.textContent = `路線 ${d.route}｜收到 ${d.kb} KB｜解出 ${d.frames} 格`;
+    const btn = document.createElement("button");
+    btn.textContent = "▶ 點一下播放";
+    btn.style.cssText = "padding:10px 20px;border:none;border-radius:20px;background:#E86AA6;color:#fff;font-size:15px;font-weight:700;cursor:pointer";
+    btn.onclick = () => { $("video").play().catch(() => {}); $("audio").play().catch(() => {}); setTimeout(() => { if (!$("video").classList.contains("on")) location.reload(); }, 4000); };
+    box.append(msg, info, btn);
+  }, 10000);
 }
 
 // ---------- 動作按鈕（伺服器有設定 data/actions/poses.json 才會出現） ----------
