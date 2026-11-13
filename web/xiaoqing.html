@@ -544,6 +544,16 @@ function startStats(receiver) {
   let last = null;
   setInterval(async () => {
     const rep = await receiver.getStats();
+    let route = "?";
+    try {
+      const all = await pc.getStats();
+      all.forEach((x) => {
+        if (x.type === "candidate-pair" && (x.selected || x.nominated) && x.state === "succeeded") {
+          const l = all.get(x.localCandidateId), r = all.get(x.remoteCandidateId);
+          route = `${l ? l.candidateType + "/" + l.protocol : "?"} → ${r ? r.candidateType + " " + (r.address || r.ip || "") : "?"}`;
+        }
+      });
+    } catch (e) {}
     let v = null, codec = "";
     rep.forEach((s) => { if (s.type === "inbound-rtp" && s.kind === "video") v = s; });
     if (!v) return;
@@ -558,7 +568,10 @@ function startStats(receiver) {
       `碼率        ${kbps.toFixed(0)} kbps\n` +
       `QP（越低越清楚） ${qp == null ? "-" : qp.toFixed(1)}\n` +
       `掉包 ${v.packetsLost || 0}   重傳要求 ${v.nackCount || 0}\n` +
-      `掉格 ${v.framesDropped || 0}   卡頓 ${v.freezeCount || 0} 次`;
+      `掉格 ${v.framesDropped || 0}   卡頓 ${v.freezeCount || 0} 次\n` +
+      `收到 ${v.framesReceived || 0} 格  解出 ${v.framesDecoded || 0} 格  關鍵格 ${v.keyFramesDecoded || 0}\n` +
+      `要求關鍵格 ${v.pliCount || 0} 次  解碼器 ${v.decoderImplementation || "?"}\n` +
+      `路線 ${route}`;
     last = v;
   }, 1000);
 }
