@@ -1428,6 +1428,11 @@ function xqElSync(XQ) {
       document.querySelector("header h1").textContent = item.name;
       document.querySelector("header .ai-tag").textContent = "AI 生成";
       document.title = item.name + "｜AI 學伴";
+      const f = (statusOf[item.id] || {}).focus;           // 照臉的位置裁切（手機直立時不會只剩背景）
+      if (f) {
+        document.documentElement.style.setProperty("--focus-x", f.x + "%");
+        document.documentElement.style.setProperty("--focus-y", Math.max(0, Math.min(100, f.y)) + "%");
+      }
     }
     window.dispatchEvent(new CustomEvent("xq-avatar", { detail: item || null }));
     setStatus(MODE === "echo" ? "複讀模式：她會照念你打的字" : "");

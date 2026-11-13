@@ -62,7 +62,7 @@ MAX_NAME = 12
 FPS = 25
 CUSTOM_SEG = os.getenv("CUSTOM_SEG", "auto").strip().lower()   # auto(=rembg) | rembg | key（單色背景，實驗用）| off
 CUSTOM_WATERMARK = os.getenv("CUSTOM_WATERMARK", "0") == "1"   # 畫面上印字；網頁標題已經有「AI 生成」標籤，預設不印
-CUSTOM_FACE_MAX = int(os.getenv("CUSTOM_FACE_MAX", "150"))      # 畫布上臉最寬幾像素（內建小晴約 115）；0 = 不限制
+CUSTOM_FACE_MAX = int(os.getenv("CUSTOM_FACE_MAX", "0"))        # 畫布上臉最寬幾像素（內建小晴約 115）；0 = 不限制（手機直立看會變很小，預設關）
 CUSTOM_MAIN_ONLY = os.getenv("CUSTOM_MAIN_ONLY", "1") == "1"      # 去背後只留面積最大的人（去掉背景路人）
 CUSTOM_STABLE_BOX = os.getenv("CUSTOM_STABLE_BOX", "1") == "1"   # 臉框固定大小＋平滑（自訂學伴比較不抖）
 CUSTOM_SR = os.getenv("CUSTOM_SR", "1") == "1"        # 小照片先用 Real-ESRGAN 放大變清楚
@@ -777,7 +777,18 @@ async def status(request):
         st = "failed"                                   # 伺服器重開過，沒做完的不會繼續
     return web.json_response({"ok": True, "status": st, "progress": live.get("progress", 100 if st == "ready" else 0),
                               "name": m.get("name"), "mode": m.get("mode") or live.get("mode"),
-                              "error": live.get("error") or m.get("error")})
+                              "error": live.get("error") or m.get("error"),
+                              "focus": _face_focus(avatar_id) if st == "ready" else None})
+
+
+def _face_focus(avatar_id):
+    """臉在畫面的哪裡（百分比），網頁用它當裁切中心：手機直立時才不會只看到空背景"""
+    try:
+        with open(os.path.join(AVATAR_DIR, avatar_id, "coords.pkl"), "rb") as f:
+            y1, y2, x1, x2 = pickle.load(f)[0]
+        return {"x": round((x1 + x2) / 2 / W * 100, 1), "y": round((y1 + y2) / 2 / H * 100, 1)}
+    except Exception:
+        return None
 
 
 async def thumb(request):

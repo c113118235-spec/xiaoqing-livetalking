@@ -22,7 +22,7 @@ def main():
     ap.add_argument("avatar_id")
     ap.add_argument("--lp", default="--preset natural --seconds 12", help="給 idle_gen.py 的參數")
     ap.add_argument("--restore", action="store_true")
-    ap.add_argument("--face-max", type=int, default=150, help="臉最寬幾像素（太大嘴型會糊）；0 = 不縮")
+    ap.add_argument("--face-max", type=int, default=0, help="臉最寬幾像素（太大嘴型會糊）；0 = 不縮")
     a = ap.parse_args()
     from server import gf_custom as g
     if not g.valid_id(a.avatar_id):
