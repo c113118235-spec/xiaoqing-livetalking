@@ -62,6 +62,7 @@ MAX_NAME = 12
 FPS = 25
 CUSTOM_SEG = os.getenv("CUSTOM_SEG", "auto").strip().lower()   # auto(=rembg) | rembg | key（單色背景，實驗用）| off
 CUSTOM_WATERMARK = os.getenv("CUSTOM_WATERMARK", "0") == "1"   # 畫面上印字；網頁標題已經有「AI 生成」標籤，預設不印
+CUSTOM_MAIN_ONLY = os.getenv("CUSTOM_MAIN_ONLY", "1") == "1"      # 去背後只留面積最大的人（去掉背景路人）
 CUSTOM_STABLE_BOX = os.getenv("CUSTOM_STABLE_BOX", "1") == "1"   # 臉框固定大小＋平滑（自訂學伴比較不抖）
 CUSTOM_SR = os.getenv("CUSTOM_SR", "1") == "1"        # 小照片先用 Real-ESRGAN 放大變清楚
 CUSTOM_SR_URL = os.getenv("CUSTOM_SR_URL",
@@ -210,6 +211,26 @@ def _cutout_key(img):
     alpha = cv2.resize(alpha, img.size, interpolation=cv2.INTER_LINEAR)
     rgba = np.dstack([np.asarray(img), (np.clip(alpha, 0, 1) * 255).astype(np.uint8)])
     return Image.fromarray(rgba, "RGBA")
+
+
+def _keep_main_person(cut):
+    """去背後只留「主角」：照片後面路過的人、旁邊的朋友會被一起切出來，只保留面積最大的那一塊
+    （先把遮罩稍微膨脹再分塊，主角身上斷開的頭髮、手指不會被誤刪）"""
+    import cv2
+    import numpy as np
+    from PIL import Image
+    a = np.asarray(cut.getchannel("A"))
+    solid = (a > 40).astype(np.uint8)
+    k = max(3, min(a.shape) // 120) | 1
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(cv2.dilate(solid, np.ones((k, k), np.uint8)), connectivity=8)
+    if n <= 2:
+        return cut, 0
+    main = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    drop = (labels != main) & (a > 0)
+    removed = n - 2
+    rgba = np.asarray(cut).copy()
+    rgba[..., 3][drop] = 0
+    return Image.fromarray(rgba, "RGBA"), removed
 
 
 def _cutout(img):
@@ -411,6 +432,10 @@ def _prepare(avatar_id, raw: bytes) -> str:
     cut, how = _cutout(img)
     if cut is not None and how == "rembg":
         cut = _decontaminate(cut, img)
+    if cut is not None and CUSTOM_MAIN_ONLY:
+        cut, removed = _keep_main_person(cut)
+        if removed:
+            logger.info("[gf-custom] %s 去掉 %d 塊不是主角的部分（背景路人等）", avatar_id, removed)
     if cut is not None:
         bbox = cut.getchannel("A").point(lambda v: 255 if v > 40 else 0).getbbox()
         if not bbox:
