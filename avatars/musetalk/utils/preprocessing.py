@@ -9,7 +9,10 @@ import os
 import json
 # from mmpose.apis import inference_topdown, init_model
 # from mmpose.structures import merge_data_samples
-import face_recognition
+try:
+    import face_recognition          # 需要 dlib（ARM 上要編譯很久）
+except ImportError:
+    face_recognition = None          # 沒裝：改用臉框推算（見下面 _bbox_landmark_box），bbox_shift 一樣可以微調
 import torch
 from tqdm import tqdm
 
@@ -82,6 +85,16 @@ def read_imgs(img_list):
 #     return text_range
     
 
+def _bbox_landmark_box(f, upperbondrange=0):
+    """沒有 face_recognition 時：用偵測框推算 MuseTalk 要的範圍（左右＝臉寬、下緣＝下巴、上緣≈鼻樑往上一段）
+    s3fd 的框大約從額頭到下巴：鼻樑點（dlib 29）約在 55% 高，下巴到鼻樑的距離再往上推一次就是上緣"""
+    x1, y1, x2, y2 = [int(v) for v in f]
+    h = y2 - y1
+    nose = y1 + 0.55 * h + upperbondrange
+    upper = max(0, int(nose - (y2 - nose)))
+    return (x1, upper, x2, y2)
+
+
 def get_landmark_and_bbox(img_list,upperbondrange =0):
     frames = read_imgs(img_list)
     batch_size_fa = 1
@@ -100,6 +113,10 @@ def get_landmark_and_bbox(img_list,upperbondrange =0):
         # keypoints = results.pred_instances.keypoints
         # face_land_mark= keypoints[0][23:91]
         # face_land_mark = face_land_mark.astype(np.int32)
+        if face_recognition is None:
+            for f in fa.get_detections_for_batch(np.asarray(fb)):
+                coords_list += [coord_placeholder if f is None else _bbox_landmark_box(f, upperbondrange)]
+            continue
         img_rgb = cv2.cvtColor(np.asarray(fb)[0], cv2.COLOR_BGR2RGB)
         landmarks_list = face_recognition.face_landmarks(img_rgb)
         if landmarks_list:
@@ -151,7 +168,10 @@ def get_landmark_and_bbox(img_list,upperbondrange =0):
                 coords_list += [f_landmark]
     
     print("********************************************bbox_shift parameter adjustment**********************************************************")
-    print(f"Total frame:「{len(frames)}」 Manually adjust range : [ -{int(sum(average_range_minus) / len(average_range_minus))}~{int(sum(average_range_plus) / len(average_range_plus))} ] , the current value: {upperbondrange}")
+    if average_range_minus:
+        print(f"Total frame:「{len(frames)}」 Manually adjust range : [ -{int(sum(average_range_minus) / len(average_range_minus))}~{int(sum(average_range_plus) / len(average_range_plus))} ] , the current value: {upperbondrange}")
+    else:
+        print(f"Total frame:「{len(frames)}」（沒有 face_recognition，用臉框推算範圍；bbox_shift={upperbondrange}）")
     print("*************************************************************************************************************************************")
     return coords_list,frames
     
