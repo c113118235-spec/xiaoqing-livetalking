@@ -523,9 +523,9 @@ function setStatus(s) { $("status").textContent = s; }
 function showNext() { $("next").textContent = queue.join(""); }
 
 // ---------- 播放緩衝（buffer）與畫質統計 ----------
-// ?buffer=300 → 瀏覽器先緩衝 300 ms 再播：晚到或要重傳的封包來得及補上，畫面較少破圖／降畫質，代價是延遲多 300 ms
+// 預設緩衝 300 ms（?buffer=0 關掉、?buffer=500 加大）：瀏覽器先緩衝再播：晚到或要重傳的封包來得及補上，畫面較少破圖／降畫質，代價是延遲多 300 ms
 // ?stats=1   → 左下角顯示解析度、碼率、掉包、重傳、緩衝時間，用來比較加 buffer 前後
-const BUFFER_MS = Math.max(0, Math.min(4000, parseInt(params.get("buffer") || "0", 10) || 0));
+const BUFFER_MS = Math.max(0, Math.min(4000, parseInt(params.get("buffer") ?? "300", 10) || 0));
 const SHOW_STATS = params.get("stats") === "1";
 
 function setBuffer(receiver) {
