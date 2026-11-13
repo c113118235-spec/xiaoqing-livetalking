@@ -62,6 +62,7 @@ MAX_NAME = 12
 FPS = 25
 CUSTOM_SEG = os.getenv("CUSTOM_SEG", "auto").strip().lower()   # auto(=rembg) | rembg | key（單色背景，實驗用）| off
 CUSTOM_WATERMARK = os.getenv("CUSTOM_WATERMARK", "0") == "1"   # 畫面上印字；網頁標題已經有「AI 生成」標籤，預設不印
+CUSTOM_FACE_MAX = int(os.getenv("CUSTOM_FACE_MAX", "150"))      # 畫布上臉最寬幾像素（內建小晴約 115）；0 = 不限制
 CUSTOM_MAIN_ONLY = os.getenv("CUSTOM_MAIN_ONLY", "1") == "1"      # 去背後只留面積最大的人（去掉背景路人）
 CUSTOM_STABLE_BOX = os.getenv("CUSTOM_STABLE_BOX", "1") == "1"   # 臉框固定大小＋平滑（自訂學伴比較不抖）
 CUSTOM_SR = os.getenv("CUSTOM_SR", "1") == "1"        # 小照片先用 Real-ESRGAN 放大變清楚
@@ -71,6 +72,7 @@ CUSTOM_SR_MODEL = os.path.join(CUSTOM_DIR, ".models", "realesr-general-x4v3.pth"
 CUSTOM_BG = os.getenv("CUSTOM_BG", os.path.join(CUSTOM_DIR, "bg.jpg"))
 os.environ.setdefault("U2NET_HOME", os.path.join(CUSTOM_DIR, ".u2net"))   # rembg 模型放這裡，重建容器也不用重下載
 
+_face_det = None
 _jobs: "queue.Queue[str]" = queue.Queue()
 _status: dict = {}            # id → {"status","progress","error","mode"}
 _lock = threading.Lock()
@@ -422,6 +424,40 @@ def _fade_cut_sides(cut, bbox) -> None:
         cut.putalpha(Image.fromarray((a * f[None, :]).astype(np.uint8)))
 
 
+def _face_width(img_rgb) -> int | None:
+    """畫布上的臉有多寬（像素）；找不到臉回傳 None"""
+    try:
+        import numpy as np
+        import torch
+        from avatars.wav2lip import face_detection
+        global _face_det
+        if _face_det is None:
+            _face_det = face_detection.FaceAlignment(face_detection.LandmarksType._2D, flip_input=False,
+                                                     device="cuda" if torch.cuda.is_available() else "cpu")
+        bgr = np.asarray(img_rgb.convert("RGB"))[:, :, ::-1].copy()
+        r = _face_det.get_detections_for_batch(np.array([bgr]))[0]
+        return int(r[2] - r[0]) if r is not None else None
+    except Exception as e:
+        logger.warning("[gf-custom] 量臉寬失敗：%s", e)
+        return None
+
+
+def shrink_canvas(path, face_max=None) -> int | None:
+    """（重做舊學伴用）把已經做好的畫布整張縮小、貼回背景下方中間，讓臉不超過 face_max 像素；回傳原本臉寬"""
+    from PIL import Image
+    face_max = face_max or CUSTOM_FACE_MAX
+    img = Image.open(path).convert("RGB")
+    fw = _face_width(img)
+    if not fw or fw <= face_max:
+        return fw
+    k = face_max / fw
+    small = img.resize((round(img.width * k), round(img.height * k)), Image.LANCZOS)
+    out = _background().convert("RGB")
+    out.paste(small, ((W - small.width) // 2, H - small.height))
+    out.save(path, quality=94)
+    return fw
+
+
 def _prepare(avatar_id, raw: bytes) -> str:
     """照片 → 1280×720 畫布：把人去背，放在房間背景下方中間；去背失敗才用「置中＋模糊背景」"""
     from PIL import Image, ImageFilter, ImageOps
@@ -442,17 +478,25 @@ def _prepare(avatar_id, raw: bytes) -> str:
             cut = None
     if cut is not None:
         _fade_cut_sides(cut, bbox)
-        person = cut.crop(bbox)
+        person0 = cut.crop(bbox)
         at_bottom = bbox[3] >= img.height - max(3, img.height // 50)   # 證件照、半身照：身體被照片下緣切掉
         target_h = H * (0.94 if at_bottom else 0.86)
-        scale = min(target_h / person.height, W * 0.9 / person.width)
-        person = person.resize((max(1, round(person.width * scale)), max(1, round(person.height * scale))), Image.LANCZOS)
-        bg = _background()
-        px = (W - person.width) // 2
-        py = H - person.height if at_bottom else (H - person.height) // 2 + int(H * 0.04)
-        bg = bg.convert("RGBA")
-        bg.alpha_composite(person, (px, py))
-        bg = bg.convert("RGB")
+        scale0 = min(target_h / person0.height, W * 0.9 / person0.width)
+
+        def compose(mult=1.0):
+            sc = scale0 * mult
+            person = person0.resize((max(1, round(person0.width * sc)), max(1, round(person0.height * sc))), Image.LANCZOS)
+            out = _background().convert("RGBA")
+            px = (W - person.width) // 2
+            py = H - person.height if at_bottom else (H - person.height) // 2 + int(H * 0.04)
+            out.alpha_composite(person, (px, py))
+            return out.convert("RGB")
+
+        bg = compose()
+        fw = _face_width(bg) if CUSTOM_FACE_MAX > 0 else None
+        if fw and fw > CUSTOM_FACE_MAX:                  # 臉太大：wav2lip 的嘴巴會被放大、看起來糊，縮成跟內建小晴差不多大
+            bg = compose(CUSTOM_FACE_MAX / fw)
+            logger.info("[gf-custom] %s 臉寬 %d px → 縮成約 %d px（嘴型比較清楚）", avatar_id, fw, CUSTOM_FACE_MAX)
         logger.info("[gf-custom] %s 去背成功（%s）", avatar_id, how)
     else:
         bg = ImageOps.fit(img, (W, H)).filter(ImageFilter.GaussianBlur(28))

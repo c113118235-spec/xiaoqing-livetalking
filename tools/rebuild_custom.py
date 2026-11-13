@@ -22,6 +22,7 @@ def main():
     ap.add_argument("avatar_id")
     ap.add_argument("--lp", default="--preset natural --seconds 12", help="給 idle_gen.py 的參數")
     ap.add_argument("--restore", action="store_true")
+    ap.add_argument("--face-max", type=int, default=150, help="臉最寬幾像素（太大嘴型會糊）；0 = 不縮")
     a = ap.parse_args()
     from server import gf_custom as g
     if not g.valid_id(a.avatar_id):
@@ -33,6 +34,8 @@ def main():
             sys.exit("沒有備份")
         shutil.rmtree(adir, ignore_errors=True)
         shutil.copytree(bk, adir)
+        if os.path.isfile(os.path.join(cdir, "canvas_orig.jpg")):
+            shutil.copy2(os.path.join(cdir, "canvas_orig.jpg"), os.path.join(cdir, "canvas.jpg"))
         print("已還原；docker restart xiaoqing 後生效")
         return
     canvas = os.path.join(cdir, "canvas.jpg")
@@ -43,6 +46,13 @@ def main():
     if os.path.isdir(adir) and not os.path.isdir(bk):
         shutil.copytree(adir, bk)                    # 只備份第一次（原始版）
         print(f"原本的版本備份在 {bk}")
+    if not os.path.isfile(os.path.join(cdir, "canvas_orig.jpg")):
+        shutil.copy2(canvas, os.path.join(cdir, "canvas_orig.jpg"))
+    else:
+        shutil.copy2(os.path.join(cdir, "canvas_orig.jpg"), canvas)   # 每次都從原始畫布開始縮
+    if a.face_max > 0:
+        fw = g.shrink_canvas(canvas, a.face_max)
+        print(f"臉寬 {fw} px" + (f" → 縮成約 {a.face_max} px" if fw and fw > a.face_max else "（不用縮）"))
     with open(os.path.join(cdir, "lp_args"), "w") as f:
         f.write(a.lp)
     os.chmod(os.path.join(cdir, "lp_args"), 0o666)
