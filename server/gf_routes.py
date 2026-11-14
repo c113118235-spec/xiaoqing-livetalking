@@ -110,11 +110,61 @@ def _no_port53(servers):
     return out
 
 
+TURN_CONF = os.path.join("data", "turn.json")
+
+
+def _turn_file() -> dict:
+    """data/turn.json（chmod 600、不進 git），改了不用重建容器：
+      {"credentials_url": "https://<你的app>.metered.live/api/v1/turn/credentials?apiKey=<金鑰>"}   ← Metered 等 REST 服務
+      或 {"ice_servers": [{"urls": "turn:host:443", "username": "...", "credential": "..."}]}       ← 固定帳號"""
+    try:
+        with open(TURN_CONF, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        logger.warning(f"[gf-turn] 讀不懂 {TURN_CONF}：{e}")
+        return {}
+
+
+def turn_configured() -> bool:
+    c = _turn_file()
+    return bool((TURN_KEY_ID and TURN_TOKEN) or c.get("credentials_url") or c.get("ice_servers"))
+
+
+async def _other_turn(stun):
+    """Cloudflare 以外的 TURN（data/turn.json）"""
+    c = _turn_file()
+    servers = []
+    if c.get("ice_servers"):
+        servers = list(c["ice_servers"])
+    elif c.get("credentials_url"):
+        if _turn_cache["servers"] and time.time() - _turn_cache["t"] < 6 * 3600:
+            return stun + _turn_cache["servers"]
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
+                async with s.get(c["credentials_url"]) as r:
+                    if r.status != 200:
+                        logger.warning(f"[gf-turn] TURN 服務回 {r.status}")
+                        return stun
+                    j = await r.json(content_type=None)
+            servers = j.get("iceServers", j) if isinstance(j, dict) else j
+            logger.info(f"[gf-turn] 取得 TURN 憑證（{len(servers)} 組）")
+        except Exception as e:
+            logger.warning(f"[gf-turn] 取得 TURN 憑證失敗：{e}")
+            return stun
+    if not servers:
+        return stun
+    servers = _no_port53(servers if isinstance(servers, list) else [servers])
+    _turn_cache.update(t=time.time(), servers=servers)
+    return stun + servers
+
+
 async def get_ice_servers():
     """回傳 [{urls, username?, credential?}, ...]；沒設定 TURN 就只有 STUN"""
     stun = [{"urls": ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"]}]
     if not (TURN_KEY_ID and TURN_TOKEN):
-        return stun
+        return await _other_turn(stun)
     if _turn_cache["servers"] and time.time() - _turn_cache["t"] < TURN_TTL / 2:
         return _turn_cache["servers"]
     url = f"https://rtc.live.cloudflare.com/v1/turn/keys/{TURN_KEY_ID}/credentials/generate-ice-servers"
@@ -142,9 +192,8 @@ async def iceservers(request):
 
 
 def _patch_server_turn():
-    """讓 LiveTalking 伺服器端的 WebRTC 也走 TURN（aiortc 只會用第一組 STUN 和第一組 TURN）"""
-    if not (TURN_KEY_ID and TURN_TOKEN):
-        return
+    """讓 LiveTalking 伺服器端的 WebRTC 也走 TURN（aiortc 只會用第一組 STUN 和第一組 TURN）；
+    沒有設定 TURN 時 _turn_cache 是空的，等於沒改"""
     import server.rtc_manager as rm
     orig = rm.RTCConfiguration
 
@@ -165,7 +214,7 @@ def _patch_server_turn():
         return orig(iceServers=servers, **kw)
 
     rm.RTCConfiguration = config_with_turn
-    logger.info("[gf-turn] 伺服器端 WebRTC 已加上 Cloudflare TURN")
+    logger.info("[gf-turn] 伺服器端 WebRTC 會加上 TURN（有設定的話）")
 
 
 def _patch_bitrate():
@@ -234,8 +283,7 @@ async def _refresh_turn_loop(app):
         while True:
             await get_ice_servers()
             await asyncio.sleep(TURN_TTL / 4)
-    if TURN_KEY_ID and TURN_TOKEN:
-        app["gf_turn_task"] = asyncio.create_task(loop())
+    app["gf_turn_task"] = asyncio.create_task(loop())     # 沒設定 TURN 時只是回傳 STUN，不花資源
 
 
 # ───────────── 4. 公開網址門禁 ─────────────
@@ -438,4 +486,4 @@ def setup_gf_routes(app):
     gf_paste.patch()
     logger.info(f"[gf-asr] /asr → {ASR_URL}")
     logger.info(f"[gf-gate] 公開網址通關碼：{'已設定' if ACCESS_CODE else '未設定（公開網址會被拒絕）'}；"
-                f"TURN：{'Cloudflare' if TURN_KEY_ID and TURN_TOKEN else '未設定（校外看不到影像）'}")
+                f"TURN：{'Cloudflare' if TURN_KEY_ID and TURN_TOKEN else ('data/turn.json' if turn_configured() else '未設定（校外看不到影像）')}")
