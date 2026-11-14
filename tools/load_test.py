@@ -33,6 +33,7 @@ class Client:
         self.pc = None
         self.sid = None
         self.track_tasks = []
+        self.frames = 0                          # 收到（解出）的影像格數 → 算每條連線的 fps
 
     async def connect(self, http):
         from aiortc import RTCPeerConnection, RTCSessionDescription
@@ -46,6 +47,8 @@ class Client:
                 try:
                     while True:
                         await track.recv()
+                        if track.kind == "video":
+                            self.frames += 1
                 except Exception:
                     pass
             self.track_tasks.append(asyncio.ensure_future(drain()))
@@ -57,17 +60,12 @@ class Client:
         r = await http.post(self.base + "/offer", json=body)
         a = await r.json(content_type=None)
         if "sdp" not in a:
-            raise RuntimeError(a.get("msg") or str(a))
+            raise RuntimeError(a.get("msg") or repr(a))
         self.sid = a["sessionid"]
         await self.pc.setRemoteDescription(RTCSessionDescription(sdp=a["sdp"], type=a["type"]))
 
     async def bytes_video(self):
-        try:
-            st = await self.pc.getStats()
-            return sum(getattr(s, "bytesReceived", 0) or 0 for s in st.values()
-                       if getattr(s, "type", "") == "inbound-rtp" and getattr(s, "kind", "") == "video")
-        except Exception:
-            return 0
+        return self.frames                       # （名字沿用）現在回傳收到的影像格數
 
     async def speaking(self, http):
         r = await http.post(self.base + "/is_speaking", json={"sessionid": self.sid})
@@ -111,14 +109,23 @@ async def main():
     a.speak = min(a.speak, a.n)
     clients = [Client(a.url.rstrip("/"), i, a.voice, a.avatar) for i in range(a.n)]
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as http:
-        print(f"1. 建立 {a.n} 條連線…")
+        print(f"1. 建立 {a.n} 條連線…", flush=True)
         ok = []
         for c in clients:
-            try:
-                await c.connect(http)
-                ok.append(c)
-            except Exception as e:
-                print(f"   第 {c.idx + 1} 條連不上：{e}")
+            for attempt in range(3):                 # 上一輪測試的連線可能還在釋放，等一下再試
+                try:
+                    await c.connect(http)
+                    ok.append(c)
+                    break
+                except Exception as e:
+                    err = repr(e)
+                    try:
+                        await c.pc.close()
+                    except Exception:
+                        pass
+                    await asyncio.sleep(5)
+            else:
+                print(f"   第 {c.idx + 1} 條連不上：{err}")
                 break
         print(f"   成功 {len(ok)} 條")
         if not ok:
@@ -128,8 +135,8 @@ async def main():
         b0 = [await c.bytes_video() for c in ok]
         await asyncio.sleep(5)
         b1 = [await c.bytes_video() for c in ok]
-        idle = [(y - x) / 5 / 1024 for x, y in zip(b0, b1)]
-        print(f"2. 待機時影像流量：每條平均 {statistics.mean(idle):.0f} KB/s（最低 {min(idle):.0f}）")
+        idle = [(y - x) / 5 for x, y in zip(b0, b1)]
+        print(f"2. 待機時每條連線收到：平均 {statistics.mean(idle):.1f} fps（最低 {min(idle):.1f}）", flush=True)
 
         lat_all = []
         for rd in range(a.rounds):
@@ -143,13 +150,13 @@ async def main():
             await asyncio.gather(*[c.wait_quiet(http) for c in group])
             dt = time.time() - t0
             b1 = [await c.bytes_video() for c in ok]
-            kbps = [(y - x) / dt / 1024 for x, y in zip(b0, b1)]
+            kbps = [(y - x) / dt for x, y in zip(b0, b1)]
             got = [x for x in lats if x is not None]
             lat_all += got
             miss = len(lats) - len(got)
             print(f"3.{rd + 1} 同時 {len(group)} 人說話：開口延遲 中位數 {statistics.median(got):.1f}s、最慢 {max(got):.1f}s"
                   + (f"、{miss} 人 40 秒內沒開口" if miss else "")
-                  + f"｜這段時間影像流量 每條平均 {statistics.mean(kbps):.0f} KB/s（最低 {min(kbps):.0f}）")
+                  + f"｜這段時間每條連線收到 平均 {statistics.mean(kbps):.1f} fps（最低 {min(kbps):.1f}）", flush=True)
             await asyncio.sleep(2)
 
         if lat_all:
