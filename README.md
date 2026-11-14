@@ -106,6 +106,7 @@ cloudflared 容器 ──► 公開 https 網址
 | 檔案 | 例子 |
 |---|---|
 | `data/tts.json` | `{"iai": {"voices": ["9D", "36D"]}}` 列出 iAI 聲音；加 `"order": ["iai","local"]` 則全部先用 iAI |
+| `data/llm.json` | `{"base_url": "https://eric49.iai.nkust.edu.tw/c217/v1", "model": "qwen-3.8-27b", "api_key": "..."}` 改用實驗室專用 LLM（`chmod 600`；連不上自動回到 iAI；刪掉 = 回到 iAI） |
 | `data/av.json` | `{"audio_delay_ms": 120}` 聲音延後，讓嘴型對齊（新連線生效） |
 | `data/api/keys.json` | 對外金鑰，用 `tools/api_keys.py` 管理 |
 
@@ -118,6 +119,8 @@ cloudflared 容器 ──► 公開 https 網址
 | `tools/api_keys.py` | 建立／停用／換新對外金鑰 |
 | `tools/ws_audio_test.py` | 端對端測試：WebSocket 送語音 → 小晴對嘴 → WebRTC 錄成 mp4 |
 | `tools/avatar_stability.py` | 量測、修正人物臉框穩定度（改之前自動備份，可還原） |
+| `tools/llm_compare.py` | 比較候選 LLM 的開口速度、簡體字、情緒標籤（`--lab` 測實驗室平台） |
+| `tools/load_test.py`、`tools/workers.sh` | 多人壓力測試；開 worker 讓一台 DGX 撐 15 人 |
 | `tools/iai_probe.py` | 測試 iAI 語音的參數 |
 | `tools/install_voices.py` | 安裝內建聲音 |
 | `tools/lp_worker.sh`、`tools/liveportrait/idle_gen.py` | 照片學伴的待機影片 |

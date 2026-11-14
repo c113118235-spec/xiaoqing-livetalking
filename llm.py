@@ -231,6 +231,37 @@ def _llm_provider(opt) -> str:
     return getattr(opt, 'llm_provider', 'dashscope') or 'dashscope'
 
 
+# 換 LLM 不用重開：data/llm.json（chmod 600、不進 git），每次對話都會檢查
+#   {"base_url": "https://eric49.iai.nkust.edu.tw/c217/v1", "model": "qwen-3.8-27b", "api_key": "sk-..."}
+#   金鑰也可以放環境變數：改寫 "key_env": "LAB_LLM_API_KEY"
+#   刪掉這個檔 = 回到原本的 iAI（--llm_provider）；實驗室的連不上時，這一句也會自動改用原本的
+LLM_CONF = os.path.join("data", "llm.json")
+_llm_conf = {"mtime": None, "data": None}
+
+
+def _lab_conf():
+    try:
+        m = os.path.getmtime(LLM_CONF)
+    except OSError:
+        _llm_conf.update(mtime=None, data=None)
+        return None
+    if m != _llm_conf["mtime"]:
+        try:
+            with open(LLM_CONF, encoding="utf-8") as f:
+                d = json.load(f)
+            key = d.get("api_key") or os.getenv(str(d.get("key_env") or ""), "")
+            if not (d.get("base_url") and d.get("model") and key):
+                raise ValueError("需要 base_url、model，以及 api_key 或 key_env")
+            d = {"base_url": d["base_url"].rstrip("/"), "model": d["model"], "api_key": key,
+                 "extra_body": d.get("extra_body", {"chat_template_kwargs": {"enable_thinking": False}})}
+            logger.info(f"llm 改用 {d['model']}（{d['base_url']}）")
+        except Exception as e:
+            logger.warning(f"llm 讀不懂 {LLM_CONF}，用原本的：{e}")
+            d = None
+        _llm_conf.update(mtime=m, data=d)
+    return _llm_conf["data"]
+
+
 def _llm_client(opt):
     """Create the OpenAI-compatible client for the configured provider."""
     from openai import OpenAI
@@ -247,14 +278,27 @@ def _llm_model(opt) -> str:
     return getattr(opt, 'llm_model', '') or cfg['default_model']
 
 
+def _create_stream(opt, messages):
+    """先試 data/llm.json 指定的（實驗室）模型，連不上就用原本的 provider"""
+    lab = _lab_conf()
+    if lab:
+        from openai import OpenAI
+        try:
+            client = OpenAI(api_key=lab["api_key"], base_url=lab["base_url"], timeout=20, max_retries=0)
+            return client.chat.completions.create(model=lab["model"], messages=messages, stream=True,
+                                                  temperature=0.8, max_tokens=400, extra_body=lab["extra_body"] or None)
+        except Exception as e:
+            logger.warning(f"llm {lab['model']} 失敗，改用原本的：{e}")
+    cfg = LLM_PROVIDERS.get(_llm_provider(opt), {})
+    return _llm_client(opt).chat.completions.create(
+        model=_llm_model(opt), messages=messages, stream=True,
+        temperature=0.8, max_tokens=400, extra_body=cfg.get("extra_body"))
+
+
 def llm_response(message, avatar_session: 'BaseAvatar', datainfo: dict = {}):
     try:
         opt = avatar_session.opt
         start = time.perf_counter()
-        client = _llm_client(opt)
-        model = _llm_model(opt)
-        cfg = LLM_PROVIDERS.get(_llm_provider(opt), {})
-
         # 每個連線各自記住最近幾輪對話
         history = getattr(avatar_session, "_gf_history", None)
         if history is None:
@@ -282,11 +326,7 @@ def llm_response(message, avatar_session: 'BaseAvatar', datainfo: dict = {}):
                     logger.info(f"關鍵字動作 {act}：{why}")
                     break
         logger.info(f"llm start: {message}")
-        completion = client.chat.completions.create(
-            model=model, messages=messages, stream=True,
-            temperature=0.8, max_tokens=400,
-            extra_body=cfg.get("extra_body"),
-        )
+        completion = _create_stream(opt, messages)
 
         emotion = "neutral"
         buf, reply, first, spoken = "", "", True, False
