@@ -457,6 +457,57 @@ async def msgpoll(request):
 STALE_SEC = int(os.getenv("GF_STALE_SEC", "20"))
 
 
+def _patch_player_stop():
+    """修 LiveTalking 會讓整個伺服器卡死的地方：
+    連線關閉時 HumanPlayer._stop() 在主執行緒（event loop）裡 join 畫面執行緒；畫面執行緒如果正卡在
+    「把畫面放進已經沒人收的佇列」（佇列滿了就一直等），join 永遠等不到 → 所有網頁、API 都沒反應。
+    改成：在背景執行緒等它結束（最多 10 秒），而且連線結束後就不再把畫面塞進佇列。"""
+    import queue as _q
+    import threading
+    from server import webrtc
+    H = webrtc.HumanPlayer
+    if getattr(H, "_gf_stop_patched", False):
+        return
+
+    def _stop(self, track):
+        started = self._HumanPlayer__started
+        started.discard(track)
+        if not started and self._HumanPlayer__thread is not None:
+            t, quit_ev = self._HumanPlayer__thread, self._HumanPlayer__thread_quit
+            quit_ev.set()
+            self._HumanPlayer__thread = None
+
+            def joiner():
+                t.join(timeout=10)
+                if t.is_alive():
+                    logger.warning("[gf-session] 畫面執行緒 10 秒內沒結束（已放著不管，不影響其他人）")
+            threading.Thread(target=joiner, daemon=True, name="gf-player-join").start()
+        if not started:
+            self._HumanPlayer__container = None
+
+    def _put(track, item):
+        if track.readyState == "ended":          # 連線已經結束：丟掉，不要卡住
+            return
+        try:
+            track._queue.put(item, timeout=1)
+        except _q.Full:
+            pass
+
+    def push_video(self, frame):
+        from av import VideoFrame
+        _put(self._HumanPlayer__video, (VideoFrame.from_ndarray(frame, format="bgr24"), None))
+
+    def push_audio(self, frame, eventpoint=None):
+        from av import AudioFrame
+        f = AudioFrame(format="s16", layout="mono", samples=frame.shape[0])
+        f.planes[0].update(frame.tobytes())
+        f.sample_rate = 16000
+        _put(self._HumanPlayer__audio, (f, eventpoint))
+
+    H._stop, H.push_video, H.push_audio = _stop, push_video, push_audio
+    H._gf_stop_patched = True
+
+
 def _patch_session_cleanup():
     """每條 WebRTC 連線記下 session id 和建立時間，方便 /bye 和定時清理找到它"""
     import server.rtc_manager as rm
@@ -531,6 +582,7 @@ async def _cleanup_loop(app):
 def setup_gf_routes(app):
     app.router.add_post("/asr", asr)
     app.router.add_post("/bye", bye)
+    _patch_player_stop()
     _patch_session_cleanup()
     app.on_startup.append(_cleanup_loop)
     app.router.add_post("/pose", pose)
