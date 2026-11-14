@@ -858,7 +858,14 @@ document.addEventListener("keyup", (e) => { if (e.code === "Space" && document.a
 
 // 瀏覽器規定要使用者點一下才能自動播放聲音，所以連線放在這個按鈕
 // （開始畫面在下方「選擇學伴」的程式裡：選好人物才連線）
-window.addEventListener("beforeunload", () => { try { es && es.close(); pc && pc.close(); } catch (e) {} });
+function leave() {             // 關掉／離開頁面：馬上告訴伺服器釋放名額（手機 Safari 不一定會觸發 beforeunload，所以也聽 pagehide）
+  try {
+    if (sessionid && navigator.sendBeacon) navigator.sendBeacon("bye", new Blob([JSON.stringify({ sessionid })], { type: "application/json" }));
+    es && es.close(); pc && pc.close();
+  } catch (e) {}
+}
+window.addEventListener("beforeunload", leave);
+window.addEventListener("pagehide", leave);
 </script>
 <script>
 /* 人設切換：女友｜學伴（清單來自 data/personas.json） */

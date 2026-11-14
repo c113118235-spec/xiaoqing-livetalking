@@ -327,7 +327,8 @@ PUBLIC_PATHS = set(PUBLIC_PATHS) | {"/persona", "/persona/list", "/sse", "/msgpo
 PUBLIC_PATHS |= {"/board", "/board/say"}          # 學伴黑板
 PUBLIC_PATHS |= {"/custom/create", "/custom/status", "/custom/thumb", "/custom/delete"}   # 自訂學伴
 PUBLIC_PATHS |= {"/tts/voices", "/tts/preview", "/voice/create", "/voice/delete"}         # 選聲音、試聽、自己的聲音
-PUBLIC_PATHS |= {"/el/sync"}                                                             # 黑板：登入教學平台同步
+PUBLIC_PATHS |= {"/el/sync"}
+PUBLIC_PATHS |= {"/bye"}                                                                  # 關掉頁面時釋放名額                                                             # 黑板：登入教學平台同步
 
 
 @web.middleware
@@ -452,8 +453,86 @@ async def msgpoll(request):
     return web.json_response({"msgs": msgs}, headers={"Cache-Control": "no-store"})
 
 
+# ───────────── 連線名額：關掉分頁就釋放、卡住的連線自動清掉 ─────────────
+STALE_SEC = int(os.getenv("GF_STALE_SEC", "20"))
+
+
+def _patch_session_cleanup():
+    """每條 WebRTC 連線記下 session id 和建立時間，方便 /bye 和定時清理找到它"""
+    import server.rtc_manager as rm
+    if getattr(rm.RTCManager, "_gf_cleanup", False):
+        return
+    orig = rm.RTCManager._create_pc_and_answer
+
+    async def create(self, avatar_session, sessionid, offer):
+        pc = await orig(self, avatar_session, sessionid, offer)
+        pc._gf_sid, pc._gf_t0, pc._gf_bad_since = sessionid, time.time(), None
+        return pc
+
+    rm.RTCManager._create_pc_and_answer = create
+    rm.RTCManager._gf_cleanup = True
+
+
+async def _close_pc(pc, why):
+    from server.session_manager import session_manager
+    sid = getattr(pc, "_gf_sid", None)
+    logger.info(f"[gf-session] 釋放 {sid}（{why}）")
+    try:
+        await pc.close()
+    except Exception:
+        pass
+    if sid:
+        session_manager.remove_session(sid)
+
+
+async def bye(request):
+    """POST /bye {sessionid}：網頁關掉時送來（sendBeacon），馬上釋放名額"""
+    try:
+        data = await request.json(content_type=None)
+    except Exception:
+        try:
+            data = json.loads(await request.text())
+        except Exception:
+            data = {}
+    sid = str(data.get("sessionid", ""))
+    rtc = request.app.get("rtc_manager")
+    for pc in list(getattr(rtc, "pcs", []) or []):
+        if getattr(pc, "_gf_sid", None) == sid and sid:
+            await _close_pc(pc, "使用者關掉頁面")
+            getattr(rtc, "pcs").discard(pc)
+            break
+    return web.json_response({"ok": True})
+
+
+async def _cleanup_loop(app):
+    """每 5 秒檢查：連不上（connecting 太久）或斷線（disconnected）超過 STALE_SEC 秒的連線就關掉"""
+    async def loop():
+        while True:
+            await asyncio.sleep(5)
+            rtc = app.get("rtc_manager")
+            now = time.time()
+            for pc in list(getattr(rtc, "pcs", []) or []):
+                st = pc.connectionState
+                if st == "connected":
+                    pc._gf_bad_since = None
+                    continue
+                if st in ("closed", "failed"):
+                    continue
+                since = getattr(pc, "_gf_bad_since", None) or getattr(pc, "_gf_t0", now)
+                if getattr(pc, "_gf_bad_since", None) is None and st == "disconnected":
+                    pc._gf_bad_since = now
+                    continue
+                if now - since > STALE_SEC:
+                    await _close_pc(pc, f"{st} 超過 {STALE_SEC} 秒")
+                    rtc.pcs.discard(pc)
+    app["gf_cleanup_task"] = asyncio.create_task(loop())
+
+
 def setup_gf_routes(app):
     app.router.add_post("/asr", asr)
+    app.router.add_post("/bye", bye)
+    _patch_session_cleanup()
+    app.on_startup.append(_cleanup_loop)
     app.router.add_post("/pose", pose)
     app.router.add_get("/pose/actions", pose_actions)
     app.router.add_post("/persona", persona)
