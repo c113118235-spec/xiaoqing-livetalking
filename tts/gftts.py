@@ -38,6 +38,8 @@ IAI_TTS_MODEL = os.getenv("IAI_TTS_MODEL", "Speaker")
 IAI_TTS_VOICE = os.getenv("IAI_TTS_VOICE", "default")
 IAI_TTS_VOICES = os.getenv("IAI_TTS_VOICES", "9D,36D")          # 開始畫面列出的 iAI 聲音（固定的說話者）
 IAI_NAME_RE = __import__("re").compile(r"^[A-Za-z0-9-]{1,24}$")
+_iai_busy = [0]                       # 目前同時在等 iAI 回應的句數（找多人時慢在哪用）
+_iai_lock = __import__("threading").Lock()
 IAI_TTS_TIMEOUT = float(os.getenv("IAI_TTS_TIMEOUT", "20"))
 TTS_CONF = os.getenv("TTS_CONF", os.path.join("data", "tts.json"))
 _conf = {"mtime": None, "order": ["local"], "iai": {}}
@@ -136,6 +138,10 @@ class GfTTS(BaseTTS):
         if not key:
             logger.warning("iAI 語音：沒有 IAI_API_KEY，跳過")
             return None
+        with _iai_lock:
+            _iai_busy[0] += 1
+            busy = _iai_busy[0]
+        t0 = time.time()
         try:
             r = requests.post(IAI_TTS_URL, timeout=IAI_TTS_TIMEOUT,
                               headers={"x-litellm-api-key": f"Bearer {key}", "accept": "application/json"},
@@ -143,10 +149,14 @@ class GfTTS(BaseTTS):
             r.raise_for_status()
             if len(r.content) < 200:
                 raise ValueError(f"回傳太短：{r.content[:100]!r}")
+            logger.info(f"iAI 語音 {time.time() - t0:.2f}s {len(text)}字（同時 {busy} 句在等 iAI）")
             return r.content
         except Exception as e:
-            logger.warning(f"iAI 語音失敗，改用本機語音：{e}")
+            logger.warning(f"iAI 語音失敗（{time.time() - t0:.2f}s，同時 {busy} 句），改用本機語音：{e}")
             return None
+        finally:
+            with _iai_lock:
+                _iai_busy[0] -= 1
 
     def _fetch(self, text: str, emotion: str) -> bytes | None:
         order = _order()
