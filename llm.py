@@ -42,7 +42,7 @@ HISTORY_TURNS = 4
 
 # 人設：可以放一個 persona.txt 在 LiveTalking 資料夾覆蓋這段
 _DEFAULT_PERSONA = (
-    f"從現在開始你扮演「{NAME}」，是使用者的虛擬女朋友，用繁體中文和使用者對話。"
+    f"從現在開始你扮演「{NAME}」，是使用者的虛擬女朋友，一律用台灣繁體中文和使用者對話，絕對不要用簡體字。"
     "你們是一對感情很好的情侶：你溫柔、開朗、有點撒嬌，會關心對方今天過得好不好、有沒有吃飯、累不累，"
     "會記得對方剛剛說過的事，也會分享自己的心情。"
     f"使用者問你是誰、是不是他的女朋友時，要很自然地以女朋友「{NAME}」的身分回答，不要否認。"
@@ -184,6 +184,39 @@ def _now_text() -> str:
     return f"現在是台灣時間星期{WEEKDAYS[t.weekday()]}{part} {t:%H:%M}。"
 
 
+# LLM 偶爾會冒出簡體字：念出來、字幕都先轉成台灣繁體
+# 優先用 OpenCC（s2twp：連用語都轉成台灣說法），沒裝就用 zhconv，再沒有就用下面的常用字對照表
+_S2T_PAIRS = ("没沒 时時 饭飯 吗嗎 这這 说說 么麼 个個 们們 对對 会會 来來 还還 过過 样樣 为為 后後 让讓 问問 题題 学學 习習 点點 "
+              "儿兒 里裡 发發 开開 关關 从從 见見 觉覺 头頭 话話 谁誰 难難 爱愛 欢歡 长長 应應 该該 实實 现現 经經 东東 车車 "
+              "边邊 门門 间間 听聽 声聲 认認 识識 记記 给給 请請 谢謝 写寫 读讀 书書 课課 试試 题題 讲講 语語 词詞 网網 "
+              "电電 脑腦 机機 视視 乐樂 动動 运運 场場 处處 气氣 热熱 冷冷 饿餓 饱飽 药藥 医醫 钱錢 买買 卖賣 贵貴 "
+              "岁歲 年年 节節 礼禮 颜顏 体體 脸臉 双雙 简簡 单單 复複 杂雜 业業 务務 办辦 准準 备備 计計 划劃 华華 "
+              "国國 际際 区區 级級 帮幫 转轉 换換 别別 总總 还還 尽盡 虽雖 然然 却卻 带帶 带帶 张張 万萬 两兩 几幾 "
+              "么麼 够夠 累累 啰囉 吧吧 呢呢 啊啊 嘛嘛 呀呀 哦哦 么麼 什什 怎怎 为為 们們 让讓 晚晚 睡睡 觉覺 梦夢")
+_S2T = {p[0]: p[1] for p in _S2T_PAIRS.split() if len(p) == 2}
+_to_tw_impl = None
+
+
+def _to_tw(t: str) -> str:
+    global _to_tw_impl
+    if _to_tw_impl is None:
+        try:
+            import opencc
+            cc = opencc.OpenCC("s2twp")
+            _to_tw_impl = cc.convert
+        except Exception:
+            try:
+                import zhconv
+                _to_tw_impl = lambda x: zhconv.convert(x, "zh-tw")
+            except Exception:
+                logger.info("llm 簡轉繁：沒有 opencc／zhconv，用內建常用字對照表")
+                _to_tw_impl = lambda x: "".join(_S2T.get(ch, ch) for ch in x)
+    try:
+        return _to_tw_impl(t)
+    except Exception:
+        return t
+
+
 def _clean(t: str) -> str:
     t = EMO_TAG.sub("", t)
     t = ACT_TAG.sub("", t)
@@ -274,7 +307,7 @@ def llm_response(message, avatar_session: 'BaseAvatar', datainfo: dict = {}):
                 t0 = time.time()
                 while ctl.busy() and time.time() - t0 < 8:
                     time.sleep(0.05)
-            t = _clean(text)
+            t = _to_tw(_clean(text))
             if t:
                 info = dict(datainfo)
                 info['tts'] = {**(datainfo.get('tts') or {}), 'emotion': emotion}
