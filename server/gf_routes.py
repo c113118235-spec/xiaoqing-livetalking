@@ -609,6 +609,8 @@ def setup_gf_routes(app):
     app.router.add_get("/gate", gate)
     app.router.add_post("/gate", gate)
     app.middlewares.append(gate_middleware)
+    from server import gf_dispatch
+    gf_dispatch.setup(app)                   # 一台 DGX 開多個程序分攤（data/workers.json）；要在門禁之後
     app.on_startup.append(_refresh_turn_loop)
     _patch_server_turn()
     _patch_bitrate()
