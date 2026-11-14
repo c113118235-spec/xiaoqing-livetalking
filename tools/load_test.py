@@ -10,6 +10,7 @@
   --rounds  幾輪
   --voice   用哪個聲音（female／male／iai_9D…）
   --avatar  人物（預設內建小晴；可填 custom_xxx）
+  --text    固定說這句（預設三句 24 字左右的長句；聊天時第一小段通常只有 8～12 字）
 量什麼：
   開口延遲：送出文字 → 伺服器開始說話（含 TTS 排隊、對嘴）的秒數
   影像流量：每條連線每秒收到多少 KB（掉很多 = 伺服器送不出畫面）
@@ -105,6 +106,7 @@ async def main():
     ap.add_argument("--rounds", type=int, default=3)
     ap.add_argument("--voice", default="female")
     ap.add_argument("--avatar", default="")
+    ap.add_argument("--text", default="", help="每輪都說這句（例：--text 嗨，今天過得好嗎 模擬聊天時第一小段）")
     a = ap.parse_args()
     a.speak = min(a.speak, a.n)
     clients = [Client(a.url.rstrip("/"), i, a.voice, a.avatar) for i in range(a.n)]
@@ -143,7 +145,7 @@ async def main():
             group = ok[(rd * a.speak) % len(ok):][:a.speak]
             if len(group) < a.speak:
                 group += ok[:a.speak - len(group)]
-            text = SENTENCES[rd % len(SENTENCES)]
+            text = a.text or SENTENCES[rd % len(SENTENCES)]
             b0 = [await c.bytes_video() for c in ok]
             t0 = time.time()
             lats = await asyncio.gather(*[c.say(http, text) for c in group])
